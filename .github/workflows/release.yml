@@ -12,7 +12,7 @@ env:
 
 jobs:
   setup:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     outputs:
       APPNAME: ${{ steps.get_appname.outputs.APPNAME }}
       VERSION: ${{ steps.get_version.outputs.VERSION }}
@@ -26,7 +26,7 @@ jobs:
 
   ubuntu:
     needs: [setup]
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     env:
       PACKAGENAME: ${{ needs.setup.outputs.APPNAME }}-${{ needs.setup.outputs.VERSION }}-linux
     steps:
