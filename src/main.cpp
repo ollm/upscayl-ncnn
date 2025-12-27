@@ -6,6 +6,11 @@
 #include <vector>
 #include <clocale>
 #include <filesystem>
+#include <string>
+#if _WIN32
+#include <locale>
+#include <codecvt>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -201,6 +206,7 @@ static void print_usage()
     fprintf(stderr, "  -h                   show this help\n");
     fprintf(stderr, "  -i input-path        input image path (jpg/png/webp) or directory\n");
     fprintf(stderr, "  -o output-path       output image path (jpg/png/webp) or directory\n");
+    fprintf(stderr, "  -d                   enable daemon/interactive mode\n");
     fprintf(stderr, "  -z model-scale       scale according to the model (can be 2, 3, 4. default=4)\n");
     fprintf(stderr, "  -s output-scale      custom output scale (can be 2, 3, 4. default=4)\n");
     fprintf(stderr, "  -r resize            resize output to dimension (default=WxH:default), use '-r help' for more details\n");
@@ -232,6 +238,19 @@ static void print_resize_usage()
     printf("  catmullrom    - An interpolating cubic spline\n");
     printf("  mitchell      - Mitchell-Netrevalli filter with B=1/3, C=1/3\n");
     printf("  pointsample   - Simple point sampling\n");
+}
+
+static void print_daemon_help()
+{
+    fprintf(stderr, "\n📡 Daemon Mode Help\n");
+    fprintf(stderr, "==================\n\n");
+    fprintf(stderr, "Commands:\n");
+    fprintf(stderr, "  <input_path> <output_path>  Process image(s) from input to output\n");
+    fprintf(stderr, "  help                        Show this help message\n");
+    fprintf(stderr, "  quit or exit                Exit daemon mode\n\n");
+    fprintf(stderr, "Examples:\n");
+    fprintf(stderr, "  input.jpg output.jpg        Process a single image\n");
+    fprintf(stderr, "  /path/to/dir /path/to/out   Process all images in a directory\n\n");
 }
 
 class Task
@@ -738,6 +757,347 @@ void *save(void *args)
     return 0;
 }
 
+struct ProcessParams
+{
+    int scale;
+    int resizeWidth;
+    int resizeHeight;
+    int resizeMode;
+    int outputScale;
+    bool hasOutputScale;
+    float compression;
+    bool resizeProvided;
+    bool hasCustomWidth;
+    std::vector<int> tilesize;
+    path_t model;
+    path_t modelname;
+    std::vector<int> gpuid;
+    int jobs_load;
+    std::vector<int> jobs_proc;
+    int jobs_save;
+    int verbose;
+    int tta_mode;
+    path_t format;
+};
+
+static int process_image_batch(
+    const path_t &inputpath,
+    const path_t &outputpath,
+    const ProcessParams &params,
+    std::vector<RealESRGAN *> &realesrgan,
+    int prepadding)
+{
+    // collect input and output filepath
+    std::vector<path_t> input_files;
+    std::vector<path_t> output_files;
+    {
+        if (path_is_directory(inputpath) && path_is_directory(outputpath))
+        {
+            std::vector<path_t> filenames;
+            int lr = list_directory(inputpath, filenames);
+            if (lr != 0)
+                return -1;
+
+            const int count = filenames.size();
+            input_files.resize(count);
+            output_files.resize(count);
+
+            path_t last_filename;
+            path_t last_filename_noext;
+            for (int i = 0; i < count; i++)
+            {
+                path_t filename = filenames[i];
+                path_t filename_noext = get_file_name_without_extension(filename);
+                path_t output_filename = filename_noext + PATHSTR('.') + params.format;
+
+                // filename list is sorted, check if output image path conflicts
+                if (filename_noext == last_filename_noext)
+                {
+                    path_t output_filename2 = filename + PATHSTR('.') + params.format;
+#if _WIN32
+                    fwprintf(stderr, L"⚠️ Warning: both %s and %s output %s! %s will output %s\n", filename.c_str(), last_filename.c_str(), output_filename.c_str(), filename.c_str(), output_filename2.c_str());
+#else
+                    fprintf(stderr, "⚠️ Warning: both %s and %s output %s! %s will output %s\n", filename.c_str(), last_filename.c_str(), output_filename.c_str(), filename.c_str(), output_filename2.c_str());
+#endif
+                    output_filename = output_filename2;
+                }
+                else
+                {
+                    last_filename = filename;
+                    last_filename_noext = filename_noext;
+                }
+
+                input_files[i] = inputpath + PATHSTR('/') + filename;
+                output_files[i] = outputpath + PATHSTR('/') + output_filename;
+            }
+        }
+        else if (!path_is_directory(inputpath) && !path_is_directory(outputpath))
+        {
+            input_files.push_back(inputpath);
+            output_files.push_back(outputpath);
+        }
+        else
+        {
+            fprintf(stderr, "🚨 Error: Input path and Output path both must be either a file or a directory!\n");
+            return -1;
+        }
+    }
+
+    if (input_files.empty())
+    {
+        fprintf(stderr, "🚨 Error: No valid input files found!\n");
+        return -1;
+    }
+
+    fprintf(stderr, "🚀 Processing %d image(s)...\n", (int)input_files.size());
+
+    const int use_gpu_count = (int)params.gpuid.size();
+    int total_jobs_proc = 0;
+    for (int i = 0; i < use_gpu_count; i++)
+    {
+        total_jobs_proc += params.jobs_proc[i];
+    }
+
+    // main routine
+    {
+        // load image
+        LoadThreadParams ltp;
+        ltp.scale = params.scale;
+        ltp.jobs_load = params.jobs_load;
+        ltp.input_files = input_files;
+        ltp.output_files = output_files;
+
+        ncnn::Thread load_thread(load, (void *)&ltp);
+
+        // realesrgan proc
+        std::vector<ProcThreadParams> ptp(use_gpu_count);
+        for (int i = 0; i < use_gpu_count; i++)
+        {
+            ptp[i].realesrgan = realesrgan[i];
+        }
+
+        std::vector<ncnn::Thread *> proc_threads(total_jobs_proc);
+        {
+            int total_jobs_proc_id = 0;
+            for (int i = 0; i < use_gpu_count; i++)
+            {
+                for (int j = 0; j < params.jobs_proc[i]; j++)
+                {
+                    proc_threads[total_jobs_proc_id++] = new ncnn::Thread(proc, (void *)&ptp[i]);
+                }
+            }
+        }
+
+        // save image
+        SaveThreadParams stp;
+        stp.resizeWidth = params.resizeWidth;
+        stp.resizeHeight = params.resizeHeight;
+        stp.resizeMode = params.resizeMode;
+        stp.resizeProvided = params.resizeProvided;
+        stp.verbose = params.verbose;
+        stp.compression = params.compression;
+        stp.outputScale = params.outputScale;
+        stp.hasOutputScale = params.hasOutputScale;
+        stp.hasCustomWidth = params.hasCustomWidth;
+
+        std::vector<ncnn::Thread *> save_threads(params.jobs_save);
+        for (int i = 0; i < params.jobs_save; i++)
+        {
+            save_threads[i] = new ncnn::Thread(save, (void *)&stp);
+        }
+
+        // end
+        load_thread.join();
+
+        Task end;
+        end.id = -233;
+
+        for (int i = 0; i < total_jobs_proc; i++)
+        {
+            toproc.put(end);
+        }
+
+        for (int i = 0; i < total_jobs_proc; i++)
+        {
+            proc_threads[i]->join();
+            delete proc_threads[i];
+        }
+
+        for (int i = 0; i < params.jobs_save; i++)
+        {
+            tosave.put(end);
+        }
+
+        for (int i = 0; i < params.jobs_save; i++)
+        {
+            save_threads[i]->join();
+            delete save_threads[i];
+        }
+    }
+
+    return 0;
+}
+
+static int run_daemon_mode(const ProcessParams &params)
+{
+    fprintf(stderr, "\n📡 Daemon Mode Started\n");
+    
+    // Load model once and keep it in memory
+    int prepadding = 0;
+    if (params.model.find(PATHSTR("models")) != path_t::npos || params.model.find(PATHSTR("models2")) != path_t::npos)
+    {
+        prepadding = 10;
+    }
+    else
+    {
+        fprintf(stderr, "🚨 Error: Unknown model dir type. Make sure that the model directory is called 'models' with *.param and *.bin files inside it.\n");
+        return -1;
+    }
+
+#if _WIN32
+    wchar_t parampath[256];
+    wchar_t modelpath[256];
+
+    if (params.modelname == PATHSTR("realesr-animevideov3"))
+    {
+        swprintf(parampath, 256, L"%s/%s-x%s.param", params.model.c_str(), params.modelname.c_str(), std::to_string(params.scale));
+        swprintf(modelpath, 256, L"%s/%s-x%s.bin", params.model.c_str(), params.modelname.c_str(), std::to_string(params.scale));
+    }
+    else
+    {
+        swprintf(parampath, 256, L"%s/%s.param", params.model.c_str(), params.modelname.c_str());
+        swprintf(modelpath, 256, L"%s/%s.bin", params.model.c_str(), params.modelname.c_str());
+    }
+#else
+    char parampath[256];
+    char modelpath[256];
+
+    if (params.modelname == PATHSTR("realesr-animevideov3"))
+    {
+        sprintf(parampath, "%s/%s-x%s.param", params.model.c_str(), params.modelname.c_str(), std::to_string(params.scale).c_str());
+        sprintf(modelpath, "%s/%s-x%s.bin", params.model.c_str(), params.modelname.c_str(), std::to_string(params.scale).c_str());
+    }
+    else
+    {
+        sprintf(parampath, "%s/%s.param", params.model.c_str(), params.modelname.c_str());
+        sprintf(modelpath, "%s/%s.bin", params.model.c_str(), params.modelname.c_str());
+    }
+#endif
+
+    path_t paramfullpath = sanitize_filepath(parampath);
+    path_t modelfullpath = sanitize_filepath(modelpath);
+
+    const int use_gpu_count = (int)params.gpuid.size();
+    std::vector<RealESRGAN *> realesrgan(use_gpu_count);
+
+    fprintf(stderr, "🔧 Loading model...\n");
+    for (int i = 0; i < use_gpu_count; i++)
+    {
+        realesrgan[i] = new RealESRGAN(params.gpuid[i], params.tta_mode);
+        realesrgan[i]->load(paramfullpath, modelfullpath);
+        realesrgan[i]->scale = params.scale;
+        realesrgan[i]->tilesize = params.tilesize[i];
+        realesrgan[i]->prepadding = prepadding;
+    }
+    fprintf(stderr, "✅ Model loaded successfully!\n");
+#if _WIN32
+    fwprintf(stderr, L"Model: %s (scale: %dx)\n", params.modelname.c_str(), params.scale);
+#else
+    fprintf(stderr, "Model: %s (scale: %dx)\n", params.modelname.c_str(), params.scale);
+#endif
+    fprintf(stderr, "Type 'help' for usage or 'quit' to exit\n\n");
+
+    std::string line;
+    while (true)
+    {
+        fprintf(stderr, "📡 Ready> ");
+        if (!std::getline(std::cin, line))
+        {
+            break; // EOF or error
+        }
+
+        // Trim leading/trailing whitespace
+        size_t start = line.find_first_not_of(" \t\r\n");
+        size_t end = line.find_last_not_of(" \t\r\n");
+        if (start == std::string::npos)
+        {
+            continue; // Empty line
+        }
+        line = line.substr(start, end - start + 1);
+
+        if (line.empty())
+        {
+            continue;
+        }
+
+        if (line == "quit" || line == "exit")
+        {
+            fprintf(stderr, "👋 Exiting daemon mode...\n");
+            break;
+        }
+
+        if (line == "help")
+        {
+            print_daemon_help();
+            continue;
+        }
+
+        // Parse input and output paths
+        size_t space_pos = line.find(' ');
+        if (space_pos == std::string::npos)
+        {
+            fprintf(stderr, "🚨 Error: Invalid command format. Use: <input_path> <output_path>\n");
+            fprintf(stderr, "Type 'help' for more information.\n\n");
+            continue;
+        }
+
+        std::string input_str = line.substr(0, space_pos);
+        std::string output_str = line.substr(space_pos + 1);
+
+        // Trim output string
+        size_t out_start = output_str.find_first_not_of(" \t");
+        if (out_start != std::string::npos)
+        {
+            output_str = output_str.substr(out_start);
+        }
+
+        if (input_str.empty() || output_str.empty())
+        {
+            fprintf(stderr, "🚨 Error: Both input and output paths are required.\n\n");
+            continue;
+        }
+
+#if _WIN32
+        // Convert to wstring for Windows
+        std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+        path_t inputpath = converter.from_bytes(input_str);
+        path_t outputpath = converter.from_bytes(output_str);
+#else
+        path_t inputpath = input_str;
+        path_t outputpath = output_str;
+#endif
+
+        // Process the images with pre-loaded model
+        int result = process_image_batch(inputpath, outputpath, params, realesrgan, prepadding);
+        if (result != 0)
+        {
+            fprintf(stderr, "❌ Processing failed\n\n");
+        }
+        else
+        {
+            fprintf(stderr, "\n");
+        }
+    }
+
+    // Clean up models
+    for (int i = 0; i < use_gpu_count; i++)
+    {
+        delete realesrgan[i];
+    }
+
+    return 0;
+}
+
 #if _WIN32
 int wmain(int argc, wchar_t **argv)
 #else
@@ -766,11 +1126,12 @@ int main(int argc, char **argv)
     int verbose = 0;
     int tta_mode = 0;
     path_t format = PATHSTR("png");
+    bool daemon_mode = false;
 
 #if _WIN32
     setlocale(LC_ALL, "");
     wchar_t opt;
-    while ((opt = getopt(argc, argv, L"i:o:z:s:r:w:t:c:m:n:g:j:f:vxh")) != (wchar_t)-1)
+    while ((opt = getopt(argc, argv, L"i:o:z:s:r:w:t:c:m:n:g:j:f:vxhd")) != (wchar_t)-1)
     {
         switch (opt)
         {
@@ -847,6 +1208,9 @@ int main(int argc, char **argv)
         case L'x':
             tta_mode = 1;
             break;
+        case L'd':
+            daemon_mode = true;
+            break;
         case L'h':
         default:
             print_usage();
@@ -856,7 +1220,7 @@ int main(int argc, char **argv)
 #else  // _WIN32
     int opt;
     fprintf(stderr, "🚀 Starting Upscayl - Copyright © 2024\n");
-    while ((opt = getopt(argc, argv, "i:o:z:s:r:w:t:c:m:n:g:j:f:vxh")) != -1)
+    while ((opt = getopt(argc, argv, "i:o:z:s:r:w:t:c:m:n:g:j:f:vxhd")) != -1)
     {
         switch (opt)
         {
@@ -933,6 +1297,9 @@ int main(int argc, char **argv)
         case 'x':
             tta_mode = 1;
             break;
+        case 'd':
+            daemon_mode = true;
+            break;
         case 'h':
         default:
             print_usage();
@@ -940,7 +1307,7 @@ int main(int argc, char **argv)
         }
     }
 #endif // _WIN32
-    if (inputpath.empty() || outputpath.empty())
+    if (!daemon_mode && (inputpath.empty() || outputpath.empty()))
     {
         print_usage();
         return -1;
@@ -982,7 +1349,7 @@ int main(int argc, char **argv)
         }
     }
 
-    if (!path_is_directory(outputpath))
+    if (!daemon_mode && !path_is_directory(outputpath))
     {
         path_t ext = format;
 
@@ -1011,9 +1378,10 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    // collect input and output filepath
+    // collect input and output filepath (skip in daemon mode)
     std::vector<path_t> input_files;
     std::vector<path_t> output_files;
+    if (!daemon_mode)
     {
         if (path_is_directory(inputpath) && path_is_directory(outputpath))
         {
@@ -1228,102 +1596,85 @@ int main(int argc, char **argv)
         }
     }
 
+    // Branch between daemon mode and single-run mode
+    if (daemon_mode)
     {
+        // Prepare parameters for daemon mode
+        ProcessParams params;
+        params.scale = scale;
+        params.resizeWidth = resizeWidth;
+        params.resizeHeight = resizeHeight;
+        params.resizeMode = resizeMode;
+        params.outputScale = outputScale;
+        params.hasOutputScale = hasOutputScale;
+        params.compression = compression;
+        params.resizeProvided = resizeProvided;
+        params.hasCustomWidth = hasCustomWidth;
+        params.tilesize = tilesize;
+        params.model = model;
+        params.modelname = modelname;
+        params.gpuid = gpuid;
+        params.jobs_load = jobs_load;
+        params.jobs_proc = jobs_proc;
+        params.jobs_save = jobs_save;
+        params.verbose = verbose;
+        params.tta_mode = tta_mode;
+        params.format = format;
+
+        int result = run_daemon_mode(params);
+        
+        ncnn::destroy_gpu_instance();
+        return result;
+    }
+
+    // Single-run mode: process the specified input/output paths
+    {
+        // Prepare parameters
+        ProcessParams params;
+        params.scale = scale;
+        params.resizeWidth = resizeWidth;
+        params.resizeHeight = resizeHeight;
+        params.resizeMode = resizeMode;
+        params.outputScale = outputScale;
+        params.hasOutputScale = hasOutputScale;
+        params.compression = compression;
+        params.resizeProvided = resizeProvided;
+        params.hasCustomWidth = hasCustomWidth;
+        params.tilesize = tilesize;
+        params.model = model;
+        params.modelname = modelname;
+        params.gpuid = gpuid;
+        params.jobs_load = jobs_load;
+        params.jobs_proc = jobs_proc;
+        params.jobs_save = jobs_save;
+        params.verbose = verbose;
+        params.tta_mode = tta_mode;
+        params.format = format;
+
         std::vector<RealESRGAN *> realesrgan(use_gpu_count);
 
         for (int i = 0; i < use_gpu_count; i++)
         {
             realesrgan[i] = new RealESRGAN(gpuid[i], tta_mode);
-
             realesrgan[i]->load(paramfullpath, modelfullpath);
-
             realesrgan[i]->scale = scale;
             realesrgan[i]->tilesize = tilesize[i];
             realesrgan[i]->prepadding = prepadding;
         }
 
-        // main routine
-        {
-            // load image
-            LoadThreadParams ltp;
-            ltp.scale = scale;
-            ltp.jobs_load = jobs_load;
-            ltp.input_files = input_files;
-            ltp.output_files = output_files;
-
-            ncnn::Thread load_thread(load, (void *)&ltp);
-
-            // realesrgan proc
-            std::vector<ProcThreadParams> ptp(use_gpu_count);
-            for (int i = 0; i < use_gpu_count; i++)
-            {
-                ptp[i].realesrgan = realesrgan[i];
-            }
-
-            std::vector<ncnn::Thread *> proc_threads(total_jobs_proc);
-            {
-                int total_jobs_proc_id = 0;
-                for (int i = 0; i < use_gpu_count; i++)
-                {
-                    for (int j = 0; j < jobs_proc[i]; j++)
-                    {
-                        proc_threads[total_jobs_proc_id++] = new ncnn::Thread(proc, (void *)&ptp[i]);
-                    }
-                }
-            }
-
-            // save image
-            SaveThreadParams stp;
-            stp.resizeWidth = resizeWidth;
-            stp.resizeHeight = resizeHeight;
-            stp.resizeMode = resizeMode;
-            stp.resizeProvided = resizeProvided;
-            stp.verbose = verbose;
-            stp.compression = compression;
-            stp.outputScale = outputScale;
-            stp.hasOutputScale = hasOutputScale;
-            stp.hasCustomWidth = hasCustomWidth;
-
-            std::vector<ncnn::Thread *> save_threads(jobs_save);
-            for (int i = 0; i < jobs_save; i++)
-            {
-                save_threads[i] = new ncnn::Thread(save, (void *)&stp);
-            }
-
-            // end
-            load_thread.join();
-
-            Task end;
-            end.id = -233;
-
-            for (int i = 0; i < total_jobs_proc; i++)
-            {
-                toproc.put(end);
-            }
-
-            for (int i = 0; i < total_jobs_proc; i++)
-            {
-                proc_threads[i]->join();
-                delete proc_threads[i];
-            }
-
-            for (int i = 0; i < jobs_save; i++)
-            {
-                tosave.put(end);
-            }
-
-            for (int i = 0; i < jobs_save; i++)
-            {
-                save_threads[i]->join();
-                delete save_threads[i];
-            }
-        }
+        int result = process_image_batch(inputpath, outputpath, params, realesrgan, prepadding);
 
         for (int i = 0; i < use_gpu_count; i++)
         {
             delete realesrgan[i];
         }
         realesrgan.clear();
+
+        if (result != 0)
+        {
+            ncnn::destroy_gpu_instance();
+            return result;
+        }
     }
 
     ncnn::destroy_gpu_instance();
