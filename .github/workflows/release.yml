@@ -11,7 +11,7 @@ env:
 
 jobs:
   setup:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     outputs:
       APPNAME: ${{ steps.app.outputs.APPNAME }}
       VERSION: ${{ steps.ver.outputs.VERSION }}
@@ -24,7 +24,7 @@ jobs:
   # ---------------- Linux ----------------
   ubuntu:
     needs: setup
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     env:
       PACKAGENAME: ${{ needs.setup.outputs.APPNAME }}-${{ needs.setup.outputs.VERSION }}-linux
     steps:
@@ -63,7 +63,7 @@ jobs:
   # ---------------- Linux arm64 ----------------
   ubuntu-arm64:
     needs: setup
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04-arm
     env:
       PACKAGENAME: ${{ needs.setup.outputs.APPNAME }}-${{ needs.setup.outputs.VERSION }}-linux-arm64
     steps:
@@ -73,7 +73,7 @@ jobs:
 
       - name: Vulkan SDK
         run: |
-          wget https://github.com/jakoch/vulkan-sdk-arm/releases/download/${VK_VERSION}/vulkansdk-ubuntu-22.04-arm-${VK_VERSION}.tar.xz -O vk-arm64.tar.xz
+          wget https://github.com/jakoch/vulkan-sdk-arm/releases/download/${VK_VERSION}/vulkansdk-ubuntu-24.04-arm-${VK_VERSION}.tar.xz -O vk-arm64.tar.xz
           tar xf vk-arm64.tar.xz
           rm -rf ${VK_VERSION}/source ${VK_VERSION}/samples
 

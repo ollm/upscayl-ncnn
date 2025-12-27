@@ -57,7 +57,7 @@ jobs:
         cmake --build . -j 2
 
   ubuntu-arm64:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest-arm
     steps:
     - uses: actions/checkout@v4
       with:
