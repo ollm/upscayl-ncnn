@@ -60,6 +60,45 @@ jobs:
           name: ${{ env.PACKAGENAME }}
           path: ${{ env.PACKAGENAME }}.zip
 
+  # ---------------- Linux arm64 ----------------
+  ubuntu-arm64:
+    needs: setup
+    runs-on: ubuntu-22.04
+    env:
+      PACKAGENAME: ${{ needs.setup.outputs.APPNAME }}-${{ needs.setup.outputs.VERSION }}-linux-arm64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Vulkan SDK
+        run: |
+          wget https://sdk.lunarg.com/sdk/download/${VK_VERSION}/linux/vulkansdk-linux-aarch64-${VK_VERSION}.tar.xz?Human=true -O vk-arm64.tar.xz
+          tar xf vk-arm64.tar.xz
+          rm -rf ${VK_VERSION}/source ${VK_VERSION}/samples
+
+      - name: Build
+        run: |
+          sudo apt update
+          sudo apt install -y gcc-9 g++-9
+          export CC=gcc-9 CXX=g++-9
+          export VULKAN_SDK=$(pwd)/${VK_VERSION}/aarch64
+          mkdir build && cd build
+          cmake ../src
+          cmake --build . -j2
+
+      - name: Package
+        run: |
+          mkdir ${{ env.PACKAGENAME }}
+          cp README.md LICENSE build/${{ needs.setup.outputs.APPNAME }} ${{ env.PACKAGENAME }}
+          strip ${{ env.PACKAGENAME }}/${{ needs.setup.outputs.APPNAME }}
+          zip -9r ${{ env.PACKAGENAME }}.zip ${{ env.PACKAGENAME }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGENAME }}
+          path: ${{ env.PACKAGENAME }}.zip
+
   # ---------------- macOS x86_64 ----------------
   macos-x86:
     needs: setup
