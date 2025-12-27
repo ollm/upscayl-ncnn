@@ -63,7 +63,7 @@ jobs:
   # ---------------- macOS x86_64 ----------------
   macos-x86:
     needs: setup
-    runs-on: macos-13
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
         with:

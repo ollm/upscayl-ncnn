@@ -57,7 +57,7 @@ jobs:
         cmake --build . -j 2
 
   macos:
-    runs-on: macos-13
+    runs-on: macos-14
     env:
       DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
     steps:
