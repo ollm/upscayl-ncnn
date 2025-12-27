@@ -1495,8 +1495,8 @@ int main(int argc, char **argv)
 
     if (modelname == PATHSTR("realesr-animevideov3"))
     {
-        swprintf(parampath, 256, L"%s/%s-x%s.param", model.c_str(), modelname.c_str(), std::to_string(scale));
-        swprintf(modelpath, 256, L"%s/%s-x%s.bin", model.c_str(), modelname.c_str(), std::to_string(scale));
+        swprintf(parampath, 256, L"%s/%s-x%d.param", model.c_str(), modelname.c_str(), scale);
+        swprintf(modelpath, 256, L"%s/%s-x%d.bin", model.c_str(), modelname.c_str(), scale);
     }
     else
     {
@@ -1547,13 +1547,13 @@ int main(int argc, char **argv)
 
     if (modelname == PATHSTR("realesr-animevideov3"))
     {
-        sprintf(parampath, "%s/%s-x%s.param", model.c_str(), modelname.c_str(), std::to_string(scale).c_str());
-        sprintf(modelpath, "%s/%s-x%s.bin", model.c_str(), modelname.c_str(), std::to_string(scale).c_str());
+        snprintf(parampath, sizeof(parampath), "%s/%s-x%d.param", model.c_str(), modelname.c_str(), scale);
+        snprintf(modelpath, sizeof(modelpath), "%s/%s-x%d.bin", model.c_str(), modelname.c_str(), scale);
     }
     else
     {
-        sprintf(parampath, "%s/%s.param", model.c_str(), modelname.c_str());
-        sprintf(modelpath, "%s/%s.bin", model.c_str(), modelname.c_str());
+        snprintf(parampath, sizeof(parampath), "%s/%s.param", model.c_str(), modelname.c_str());
+        snprintf(modelpath, sizeof(modelpath), "%s/%s.bin", model.c_str(), modelname.c_str());
     }
 #endif
 
