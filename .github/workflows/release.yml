@@ -247,7 +247,7 @@ jobs:
 
   # ---------------- GitHub Release ----------------
   release:
-    needs: [ubuntu, macos-universal, windows, setup]
+    needs: [ubuntu, ubuntu-arm64, macos-universal, windows, setup]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
