@@ -780,6 +780,38 @@ struct ProcessParams
     path_t format;
 };
 
+static ProcessParams create_process_params(
+    int scale, int resizeWidth, int resizeHeight, int resizeMode,
+    int outputScale, bool hasOutputScale, float compression,
+    bool resizeProvided, bool hasCustomWidth,
+    const std::vector<int> &tilesize, const path_t &model,
+    const path_t &modelname, const std::vector<int> &gpuid,
+    int jobs_load, const std::vector<int> &jobs_proc, int jobs_save,
+    int verbose, int tta_mode, const path_t &format)
+{
+    ProcessParams params;
+    params.scale = scale;
+    params.resizeWidth = resizeWidth;
+    params.resizeHeight = resizeHeight;
+    params.resizeMode = resizeMode;
+    params.outputScale = outputScale;
+    params.hasOutputScale = hasOutputScale;
+    params.compression = compression;
+    params.resizeProvided = resizeProvided;
+    params.hasCustomWidth = hasCustomWidth;
+    params.tilesize = tilesize;
+    params.model = model;
+    params.modelname = modelname;
+    params.gpuid = gpuid;
+    params.jobs_load = jobs_load;
+    params.jobs_proc = jobs_proc;
+    params.jobs_save = jobs_save;
+    params.verbose = verbose;
+    params.tta_mode = tta_mode;
+    params.format = format;
+    return params;
+}
+
 static int process_image_batch(
     const path_t &inputpath,
     const path_t &outputpath,
@@ -960,8 +992,8 @@ static int run_daemon_mode(const ProcessParams &params)
 
     if (params.modelname == PATHSTR("realesr-animevideov3"))
     {
-        swprintf(parampath, 256, L"%s/%s-x%s.param", params.model.c_str(), params.modelname.c_str(), std::to_string(params.scale));
-        swprintf(modelpath, 256, L"%s/%s-x%s.bin", params.model.c_str(), params.modelname.c_str(), std::to_string(params.scale));
+        swprintf(parampath, 256, L"%s/%s-x%d.param", params.model.c_str(), params.modelname.c_str(), params.scale);
+        swprintf(modelpath, 256, L"%s/%s-x%d.bin", params.model.c_str(), params.modelname.c_str(), params.scale);
     }
     else
     {
@@ -974,13 +1006,13 @@ static int run_daemon_mode(const ProcessParams &params)
 
     if (params.modelname == PATHSTR("realesr-animevideov3"))
     {
-        sprintf(parampath, "%s/%s-x%s.param", params.model.c_str(), params.modelname.c_str(), std::to_string(params.scale).c_str());
-        sprintf(modelpath, "%s/%s-x%s.bin", params.model.c_str(), params.modelname.c_str(), std::to_string(params.scale).c_str());
+        snprintf(parampath, sizeof(parampath), "%s/%s-x%d.param", params.model.c_str(), params.modelname.c_str(), params.scale);
+        snprintf(modelpath, sizeof(modelpath), "%s/%s-x%d.bin", params.model.c_str(), params.modelname.c_str(), params.scale);
     }
     else
     {
-        sprintf(parampath, "%s/%s.param", params.model.c_str(), params.modelname.c_str());
-        sprintf(modelpath, "%s/%s.bin", params.model.c_str(), params.modelname.c_str());
+        snprintf(parampath, sizeof(parampath), "%s/%s.param", params.model.c_str(), params.modelname.c_str());
+        snprintf(modelpath, sizeof(modelpath), "%s/%s.bin", params.model.c_str(), params.modelname.c_str());
     }
 #endif
 
@@ -1600,26 +1632,12 @@ int main(int argc, char **argv)
     if (daemon_mode)
     {
         // Prepare parameters for daemon mode
-        ProcessParams params;
-        params.scale = scale;
-        params.resizeWidth = resizeWidth;
-        params.resizeHeight = resizeHeight;
-        params.resizeMode = resizeMode;
-        params.outputScale = outputScale;
-        params.hasOutputScale = hasOutputScale;
-        params.compression = compression;
-        params.resizeProvided = resizeProvided;
-        params.hasCustomWidth = hasCustomWidth;
-        params.tilesize = tilesize;
-        params.model = model;
-        params.modelname = modelname;
-        params.gpuid = gpuid;
-        params.jobs_load = jobs_load;
-        params.jobs_proc = jobs_proc;
-        params.jobs_save = jobs_save;
-        params.verbose = verbose;
-        params.tta_mode = tta_mode;
-        params.format = format;
+        ProcessParams params = create_process_params(
+            scale, resizeWidth, resizeHeight, resizeMode,
+            outputScale, hasOutputScale, compression,
+            resizeProvided, hasCustomWidth, tilesize, model,
+            modelname, gpuid, jobs_load, jobs_proc, jobs_save,
+            verbose, tta_mode, format);
 
         int result = run_daemon_mode(params);
         
@@ -1630,26 +1648,12 @@ int main(int argc, char **argv)
     // Single-run mode: process the specified input/output paths
     {
         // Prepare parameters
-        ProcessParams params;
-        params.scale = scale;
-        params.resizeWidth = resizeWidth;
-        params.resizeHeight = resizeHeight;
-        params.resizeMode = resizeMode;
-        params.outputScale = outputScale;
-        params.hasOutputScale = hasOutputScale;
-        params.compression = compression;
-        params.resizeProvided = resizeProvided;
-        params.hasCustomWidth = hasCustomWidth;
-        params.tilesize = tilesize;
-        params.model = model;
-        params.modelname = modelname;
-        params.gpuid = gpuid;
-        params.jobs_load = jobs_load;
-        params.jobs_proc = jobs_proc;
-        params.jobs_save = jobs_save;
-        params.verbose = verbose;
-        params.tta_mode = tta_mode;
-        params.format = format;
+        ProcessParams params = create_process_params(
+            scale, resizeWidth, resizeHeight, resizeMode,
+            outputScale, hasOutputScale, compression,
+            resizeProvided, hasCustomWidth, tilesize, model,
+            modelname, gpuid, jobs_load, jobs_proc, jobs_save,
+            verbose, tta_mode, format);
 
         std::vector<RealESRGAN *> realesrgan(use_gpu_count);
 
