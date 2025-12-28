@@ -262,6 +262,8 @@ jobs:
       - name: Build
         run: |
           $env:VULKAN_SDK="C:\VulkanSDK"
+          # Patch NCNN "neon_mathfun_fp16s.h" to old version to avoid build errors
+          Copy-Item -Verbose -Path "neon_mathfun_fp16s.h" -Destination "src\ncnn\src\layer\arm\neon_mathfun_fp16s.h"
           mkdir build; cd build
           cmake -A arm64 ../src -G "Visual Studio 17 2022"
           cmake --build . --config Release
