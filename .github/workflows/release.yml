@@ -234,7 +234,7 @@ jobs:
         run: |
           $env:VULKAN_SDK="C:\VulkanSDK"
           mkdir build; cd build
-          cmake -A x64 ../src -G "NMake Makefiles"
+          cmake ../src -G "NMake Makefiles"
           cmake --build . --config Release
 
       - name: Package
@@ -273,7 +273,7 @@ jobs:
         run: |
           $env:VULKAN_SDK="C:\VulkanSDK"
           mkdir build; cd build
-          cmake -A arm64 ../src -G "NMake Makefiles"
+          cmake ../src -G "NMake Makefiles"
           cmake --build . --config Release
 
       - name: Package
