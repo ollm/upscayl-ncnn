@@ -113,11 +113,10 @@ jobs:
 
       - name: Vulkan SDK
         run: |
-          curl -L -o vk.dmg "https://sdk.lunarg.com/sdk/download/${{ env.VK_VERSION }}/mac/vulkansdk-macos-${{ env.VK_VERSION }}.dmg?Human=true"
-          hdiutil attach vk.dmg -quiet
-          sudo /Volumes/vulkansdk-macos-${{ env.VK_VERSION }}/InstallVulkan.app/Contents/MacOS/InstallVulkan \
+            curl -L -o vk.zip "https://sdk.lunarg.com/sdk/download/${{ env.VK_VERSION }}/mac/vulkansdk-macos-${{ env.VK_VERSION }}.zip"
+            unzip -q vk.zip
+            sudo ./vulkansdk-macOS-${{ env.VK_VERSION }}.app/Contents/MacOS/vulkansdk-macOS-${{ env.VK_VERSION }} \
             --root $(pwd)/vulkan-mac-sdk --accept-licenses --default-answer --confirm-command install
-          hdiutil detach /Volumes/vulkansdk-macos-${{ env.VK_VERSION }} -quiet
 
       - name: Build x86_64
         run: |
@@ -155,11 +154,10 @@ jobs:
 
       - name: Vulkan SDK
         run: |
-          curl -L -o vk.dmg "https://sdk.lunarg.com/sdk/download/${{ env.VK_VERSION }}/mac/vulkansdk-macos-${{ env.VK_VERSION }}.dmg?Human=true"
-          hdiutil attach vk.dmg -quiet
-          sudo /Volumes/vulkansdk-macos-${{ env.VK_VERSION }}/InstallVulkan.app/Contents/MacOS/InstallVulkan \
+          curl -L -o vk.zip "https://sdk.lunarg.com/sdk/download/${{ env.VK_VERSION }}/mac/vulkansdk-macos-${{ env.VK_VERSION }}.zip"
+          unzip -q vk.zip
+          sudo ./vulkansdk-macOS-${{ env.VK_VERSION }}.app/Contents/MacOS/vulkansdk-macOS-${{ env.VK_VERSION }} \
             --root $(pwd)/vulkan-mac-sdk --accept-licenses --default-answer --confirm-command install
-          hdiutil detach /Volumes/vulkansdk-macos-${{ env.VK_VERSION }} -quiet
 
       - name: Build arm64
         run: |
@@ -224,7 +222,7 @@ jobs:
 
       - name: Vulkan SDK
         run: |
-          Invoke-WebRequest https://sdk.lunarg.com/sdk/download/${{ env.VK_VERSION }}/windows/VulkanSDK-${{ env.VK_VERSION }}-Installer.exe?Human=true -OutFile vk.exe
+          Invoke-WebRequest https://sdk.lunarg.com/sdk/download/${{ env.VK_VERSION }}/windows/vulkansdk-windows-X64-${{ env.VK_VERSION }}.exe -OutFile vk.exe
           7z x vk.exe -oVulkanSDK
 
       - name: Build
