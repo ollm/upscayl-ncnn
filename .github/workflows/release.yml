@@ -125,7 +125,7 @@ jobs:
           cmake ../src \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_OSX_ARCHITECTURES=x86_64 \
-            -DMACOSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
             -DUSE_STATIC_MOLTENVK=ON \
             -DOpenMP_C_FLAGS="-Xclang -fopenmp -I$LIBOMP/include" \
             -DOpenMP_CXX_FLAGS="-Xclang -fopenmp -I$LIBOMP/include" \
@@ -167,7 +167,7 @@ jobs:
           cmake ../src \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DMACOSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
             -DUSE_STATIC_MOLTENVK=ON \
             -DOpenMP_C_FLAGS="-Xclang -fopenmp -I$LIBOMP/include" \
             -DOpenMP_CXX_FLAGS="-Xclang -fopenmp -I$LIBOMP/include" \
