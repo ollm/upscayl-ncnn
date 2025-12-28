@@ -113,10 +113,10 @@ jobs:
 
       - name: Vulkan SDK
         run: |
-            curl -L -o vk.zip "https://sdk.lunarg.com/sdk/download/${{ env.VK_VERSION }}/mac/vulkansdk-macos-${{ env.VK_VERSION }}.zip"
-            unzip -q vk.zip
-            sudo ./vulkansdk-macOS-${{ env.VK_VERSION }}.app/Contents/MacOS/vulkansdk-macOS-${{ env.VK_VERSION }} \
-            --root $(pwd)/vulkan-mac-sdk --accept-licenses --default-answer --confirm-command install
+          curl -L -o vk.zip "https://sdk.lunarg.com/sdk/download/${{ env.VK_VERSION }}/mac/vulkansdk-macos-${{ env.VK_VERSION }}.zip"
+          unzip -q vk.zip
+          sudo ./vulkansdk-macOS-${{ env.VK_VERSION }}.app/Contents/MacOS/vulkansdk-macOS-${{ env.VK_VERSION }} \
+          --root $(pwd)/vulkan-mac-sdk --accept-licenses --default-answer --confirm-command install
 
       - name: Build x86_64
         run: |
@@ -262,8 +262,10 @@ jobs:
       - name: Build
         run: |
           $env:VULKAN_SDK="C:\VulkanSDK"
+          # Patch NCNN to support configuring for ARM64 on Windows
+          (Get-Content src\ncnn\CMakeLists.txt) -replace '    OR \(CMAKE_SYSTEM_PROCESSOR MATCHES "\^\(arm\|aarch64\)"\)', '    OR (CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm|aarch64|arm64|ARM64)")' | Set-Content src\ncnn\CMakeLists.txt
           mkdir build; cd build
-          cmake -A ARM64 ../src -G "Visual Studio 17 2022"
+          cmake -A arm64 ../src -G "Visual Studio 17 2022"
           cmake --build . --config Release
 
       - name: Package
