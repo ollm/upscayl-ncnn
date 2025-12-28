@@ -125,6 +125,7 @@ jobs:
           cmake ../src \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DMACOSX_DEPLOYMENT_TARGET=14.0 \
             -DUSE_STATIC_MOLTENVK=ON \
             -DOpenMP_C_FLAGS="-Xclang -fopenmp -I$LIBOMP/include" \
             -DOpenMP_CXX_FLAGS="-Xclang -fopenmp -I$LIBOMP/include" \
@@ -166,6 +167,7 @@ jobs:
           cmake ../src \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DMACOSX_DEPLOYMENT_TARGET=14.0 \
             -DUSE_STATIC_MOLTENVK=ON \
             -DOpenMP_C_FLAGS="-Xclang -fopenmp -I$LIBOMP/include" \
             -DOpenMP_CXX_FLAGS="-Xclang -fopenmp -I$LIBOMP/include" \
@@ -223,7 +225,7 @@ jobs:
       - name: Vulkan SDK
         run: |
           Invoke-WebRequest https://sdk.lunarg.com/sdk/download/${{ env.VK_VERSION }}/windows/vulkansdk-windows-X64-${{ env.VK_VERSION }}.exe -OutFile vk.exe
-          .\vk.exe --acceptlicenses --default-answer --confirm-command install
+          .\vk.exe --accept-licenses --default-answer --confirm-command install
 
       - name: Build
         run: |
