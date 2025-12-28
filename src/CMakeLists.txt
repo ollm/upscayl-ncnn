@@ -86,11 +86,23 @@ if(OPENMP_FOUND)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
 endif()
 
-if(MSVC AND (CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm64"))
-    message(STATUS "Applying MSVC ARM64 FP16 workaround")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /O1")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /O1")
+# ========== MSVC ARM64 FP16 WORKAROUND START ==========
+if(MSVC AND (CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|arm64|aarch64" OR CMAKE_GENERATOR_PLATFORM MATCHES "ARM64"))
+    message(WARNING "Detected MSVC ARM64 build - applying FP16 ICE workaround")
+    
+    # Option 1: Reduce optimization level globally
+    # This trades some performance for successful compilation
+    string(REPLACE "/O2" "/O1" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
+    string(REPLACE "/O2" "/O1" CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}")
+    
+    # Option 2: Disable problematic optimizations
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /d2ssa-cfg-jt-")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /d2ssa-cfg-jt-")
+    
+    message(STATUS "Applied optimization workaround for MSVC ARM64 FP16 compiler bug")
 endif()
+# ========== MSVC ARM64 FP16 WORKAROUND END ==========
+
 
 # enable global link time optimization
 cmake_policy(SET CMP0069 NEW)
