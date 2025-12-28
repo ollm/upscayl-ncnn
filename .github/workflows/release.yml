@@ -102,7 +102,7 @@ jobs:
   # ---------------- macOS x86_64 ----------------
   macos-x86:
     needs: setup
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -125,7 +125,6 @@ jobs:
           cmake ../src \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_OSX_ARCHITECTURES=x86_64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
             -DUSE_STATIC_MOLTENVK=ON \
             -DOpenMP_C_FLAGS="-Xclang -fopenmp -I$LIBOMP/include" \
             -DOpenMP_CXX_FLAGS="-Xclang -fopenmp -I$LIBOMP/include" \
@@ -144,7 +143,7 @@ jobs:
   # ---------------- macOS arm64 ----------------
   macos-arm:
     needs: setup
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -167,7 +166,6 @@ jobs:
           cmake ../src \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
             -DUSE_STATIC_MOLTENVK=ON \
             -DOpenMP_C_FLAGS="-Xclang -fopenmp -I$LIBOMP/include" \
             -DOpenMP_CXX_FLAGS="-Xclang -fopenmp -I$LIBOMP/include" \
@@ -186,7 +184,7 @@ jobs:
   # ---------------- macOS Universal ----------------
   macos-universal:
     needs: [setup, macos-x86, macos-arm]
-    runs-on: macos-14
+    runs-on: macos-15
     env:
       PACKAGENAME: ${{ needs.setup.outputs.APPNAME }}-${{ needs.setup.outputs.VERSION }}-macos
     steps:
@@ -236,7 +234,7 @@ jobs:
       - name: Build
         run: |
           mkdir build; cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64 -DVulkan_INCLUDE_DIR="$env:VULKAN_SDK\Include" -DVulkan_LIBRARY="$env:VULKAN_SDK\Lib\vulkan-1.lib"
+          cmake ../src -G "Visual Studio 17 2022" -A x64 -DVulkan_INCLUDE_DIR="$env:VULKAN_SDK\Include" -DVulkan_LIBRARY="$env:VULKAN_SDK\Lib\vulkan-1.lib"
           cmake --build . --config Release
 
       - name: Package
