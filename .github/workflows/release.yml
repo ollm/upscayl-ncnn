@@ -223,13 +223,12 @@ jobs:
       - name: Vulkan SDK
         run: |
           Invoke-WebRequest https://sdk.lunarg.com/sdk/download/${{ env.VK_VERSION }}/windows/vulkansdk-windows-X64-${{ env.VK_VERSION }}.exe -OutFile vk.exe
-          7z x vk.exe -oVulkanSDK
+          .\vk.exe --acceptlicenses --default-answer --confirm-command install
 
       - name: Build
         run: |
-          $env:VULKAN_SDK="$(pwd)/VulkanSDK"
           mkdir build; cd build
-          cmake -A x64 ../src
+          cmake .. -G "Visual Studio 17 2022" -A x64
           cmake --build . --config Release
 
       - name: Package
