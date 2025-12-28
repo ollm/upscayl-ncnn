@@ -234,7 +234,7 @@ jobs:
         run: |
           $env:VULKAN_SDK="C:\VulkanSDK"
           mkdir build; cd build
-          cmake -A x64 ../src -G "Visual Studio 18 2026"
+          cmake -A x64 ../src -G "NMake Makefiles"
           cmake --build . --config Release
 
       - name: Package
@@ -262,7 +262,7 @@ jobs:
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
         with:
-          arch: arm64
+          arch: amd64_arm64
 
       - name: Vulkan SDK
         run: |
@@ -273,7 +273,7 @@ jobs:
         run: |
           $env:VULKAN_SDK="C:\VulkanSDK"
           mkdir build; cd build
-          cmake -A arm64 ../src -G "Visual Studio 18 2026"
+          cmake -A arm64 ../src -G "NMake Makefiles"
           cmake --build . --config Release
 
       - name: Package
