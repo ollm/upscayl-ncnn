@@ -224,25 +224,42 @@ jobs:
         run: |
           Invoke-WebRequest https://sdk.lunarg.com/sdk/download/${{ env.VK_VERSION }}/windows/vulkansdk-windows-X64-${{ env.VK_VERSION }}.exe -OutFile vk.exe
           .\vk.exe install --accept-licenses --default-answer --confirm-command --root C:\VulkanSDK
+          
+      - name:  Verify Vulkan Installation
+        shell: powershell
+        run: |
+          $vulkanPath = "C:\VulkanSDK\${{ env.VK_VERSION }}"
+          if (Test-Path "$vulkanPath\Bin\glslangValidator.exe") {
+            Write-Host "✓ glslangValidator. exe found"
+          } else {
+            Write-Error "✗ glslangValidator.exe not found"
+            exit 1
+          }
 
       - name: Build
         env:
           VULKAN_SDK: C:\VulkanSDK\${{ env.VK_VERSION }}
         run: |
           $env:PATH = "$env:VULKAN_SDK\Bin;$env:PATH"
-          mkdir build; cd build
+          $env:VULKAN_SDK = "C:\VulkanSDK\${{ env.VK_VERSION }}"
+          
+          # Verify glslangValidator is accessible
+          & "$env:VULKAN_SDK\Bin\glslangValidator.exe" --version
+          
+          mkdir build
+          cd build
           cmake ../src `
             -G "Visual Studio 17 2022" `
             -A x64 `
             -DVulkan_INCLUDE_DIR="$env:VULKAN_SDK\Include" `
             -DVulkan_LIBRARY="$env:VULKAN_SDK\Lib\vulkan-1.lib" `
-            -DGLSLANGVALIDATOR_EXECUTABLE="$env:VULKAN_SDK\Bin\glslangValidator.exe"
-          cmake --build . --config Release
+            -DGLSLANG_VALIDATOR="$env:VULKAN_SDK\Bin\glslangValidator.exe"
+          cmake --build . --config Release -j 4
 
       - name: Package
         run: |
           mkdir "${{ env.PACKAGENAME }}"
-          Copy-Item -Path @("README.md","LICENSE","build/Release/${{ needs.setup.outputs.APPNAME }}.exe") -Destination "${{ env.PACKAGENAME }}"
+          Copy-Item README.md, LICENSE, "build/Release/${{ needs.setup.outputs.APPNAME }}.exe" -Destination "${{ env.PACKAGENAME }}"
           7z a "${{ env.PACKAGENAME }}.zip" "${{ env.PACKAGENAME }}"
 
       - uses: actions/upload-artifact@v4
