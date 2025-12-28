@@ -246,7 +246,7 @@ jobs:
   # ---------------- Windows arm64 ----------------
   windows-arm64:
     needs: setup
-    runs-on: windows-latest-arm
+    runs-on: windows-11-arm
     env:
       PACKAGENAME: ${{ needs.setup.outputs.APPNAME }}-${{ needs.setup.outputs.VERSION }}-windows-arm64
     steps:
