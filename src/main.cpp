@@ -1074,17 +1074,71 @@ static int run_daemon_mode(const ProcessParams &params)
             continue;
         }
 
-        // Parse input and output paths
-        size_t space_pos = line.find(' ');
-        if (space_pos == std::string::npos)
+        // Parse input and output paths (with support for quoted paths)
+        std::string input_str, output_str;
+        size_t pos = 0;
+        
+        // Parse first argument (input path)
+        if (line[pos] == '"')
         {
-            fprintf(stderr, "🚨 Error: Invalid command format. Use: <input_path> <output_path>\n");
+            // Quoted path
+            pos++; // Skip opening quote
+            size_t end_quote = line.find('"', pos);
+            if (end_quote == std::string::npos)
+            {
+                fprintf(stderr, "🚨 Error: Unclosed quote in input path.\n");
+                fprintf(stderr, "Type 'help' for more information.\n\n");
+                continue;
+            }
+            input_str = line.substr(pos, end_quote - pos);
+            pos = end_quote + 1;
+        }
+        else
+        {
+            // Unquoted path
+            size_t space_pos = line.find(' ', pos);
+            if (space_pos == std::string::npos)
+            {
+                fprintf(stderr, "🚨 Error: Invalid command format. Use: <input_path> <output_path>\n");
+                fprintf(stderr, "Type 'help' for more information.\n\n");
+                continue;
+            }
+            input_str = line.substr(pos, space_pos - pos);
+            pos = space_pos;
+        }
+        
+        // Skip whitespace between arguments
+        while (pos < line.length() && (line[pos] == ' ' || line[pos] == '\t'))
+        {
+            pos++;
+        }
+        
+        if (pos >= line.length())
+        {
+            fprintf(stderr, "🚨 Error: Output path is missing.\n");
             fprintf(stderr, "Type 'help' for more information.\n\n");
             continue;
         }
-
-        std::string input_str = line.substr(0, space_pos);
-        std::string output_str = line.substr(space_pos + 1);
+        
+        // Parse second argument (output path)
+        if (line[pos] == '"')
+        {
+            // Quoted path
+            pos++; // Skip opening quote
+            size_t end_quote = line.find('"', pos);
+            if (end_quote == std::string::npos)
+            {
+                fprintf(stderr, "🚨 Error: Unclosed quote in output path.\n");
+                fprintf(stderr, "Type 'help' for more information.\n\n");
+                continue;
+            }
+            output_str = line.substr(pos, end_quote - pos);
+        }
+        else
+        {
+            // Unquoted path (rest of the line)
+            output_str = line.substr(pos);
+        }
 
         // Trim output string
         size_t out_start = output_str.find_first_not_of(" \t");
