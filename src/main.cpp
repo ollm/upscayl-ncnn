@@ -245,12 +245,22 @@ static void print_daemon_help()
     fprintf(stderr, "\n📡 Daemon Mode Help\n");
     fprintf(stderr, "==================\n\n");
     fprintf(stderr, "Commands:\n");
-    fprintf(stderr, "  <input_path> <output_path>  Process image(s) from input to output\n");
-    fprintf(stderr, "  help                        Show this help message\n");
-    fprintf(stderr, "  quit or exit                Exit daemon mode\n\n");
+    fprintf(stderr, "  -i input-path        input image path (jpg/png/webp) or directory\n");
+    fprintf(stderr, "  -o output-path       output image path (jpg/png/webp) or directory\n");
+    fprintf(stderr, "  -z model-scale       scale according to the model (can be 2, 3, 4. default=4)\n");
+    fprintf(stderr, "  -s output-scale      custom output scale (can be 2, 3, 4. default=4)\n");
+    fprintf(stderr, "  -r resize            resize output to dimension (default=WxH:default), use '-r help' for more details\n");
+    fprintf(stderr, "  -w width             resize output to a width (default=W:default), use '-r help' for more details\n");
+    fprintf(stderr, "  -c compress          compression of the output image, default 0 and varies to 100\n");
+    fprintf(stderr, "  -t tile-size         tile size (>=32/0=auto, default=0) can be 0,0,0 for multi-gpu\n");
+    fprintf(stderr, "  -j load:proc:save    thread count for load/proc/save (default=1:2:2) can be 1:2,2,2:2 for multi-gpu\n");
+    fprintf(stderr, "  -x                   enable tta mode\n");
+    fprintf(stderr, "  -f format            output image format (jpg/png/webp, default=ext/png)\n");
+    fprintf(stderr, "  help                 Show this help message\n");
+    fprintf(stderr, "  quit or exit         Exit daemon mode\n\n");
     fprintf(stderr, "Examples:\n");
-    fprintf(stderr, "  input.jpg output.jpg        Process a single image\n");
-    fprintf(stderr, "  /path/to/dir /path/to/out   Process all images in a directory\n\n");
+    fprintf(stderr, "  -i input.jpg -o output.jpg        Process a single image\n");
+    fprintf(stderr, "  -i /path/to/dir -o /path/to/out   Process all images in a directory\n\n");
 }
 
 class Task
@@ -970,10 +980,46 @@ static int process_image_batch(
     return 0;
 }
 
-static int run_daemon_mode(const ProcessParams &params)
+std::vector<std::string> split_cmdline(const std::string& cmd) {
+    std::vector<std::string> args;
+    std::string current;
+    bool in_quotes = false;
+
+    for (size_t i = 0; i < cmd.size(); ++i) {
+        char c = cmd[i];
+
+        if (c == '"') {
+            in_quotes = !in_quotes;
+        } else if (std::isspace(static_cast<unsigned char>(c)) && !in_quotes) {
+            if (!current.empty()) {
+                args.push_back(current);
+                current.clear();
+            }
+        } else {
+            current += c;
+        }
+    }
+
+    if (!current.empty())
+        args.push_back(current);
+
+    return args;
+}
+
+static int run_daemon_mode(ProcessParams &params)
 {
     fprintf(stderr, "\n📡 Daemon Mode Started\n");
-    
+
+    ProcessParams originalParams;
+    double compression = params.compression;
+    int resizeWidth = params.resizeWidth;
+    int resizeHeight = params.resizeHeight;
+    int resizeMode = params.resizeMode;
+    int jobs_load = params.jobs_load;
+    int jobs_save = params.jobs_save;
+
+    originalParams = params;
+
     // Load model once and keep it in memory
     int prepadding = 0;
     if (params.model.find(PATHSTR("models")) != path_t::npos || params.model.find(PATHSTR("models2")) != path_t::npos)
@@ -1074,77 +1120,102 @@ static int run_daemon_mode(const ProcessParams &params)
             continue;
         }
 
-        // Parse input and output paths (with support for quoted paths)
-        std::string input_str, output_str;
-        size_t pos = 0;
-        
-        // Parse first argument (input path)
-        if (line[pos] == '"')
-        {
-            // Quoted path
-            pos++; // Skip opening quote
-            size_t end_quote = line.find('"', pos);
-            if (end_quote == std::string::npos)
-            {
-                fprintf(stderr, "🚨 Error: Unclosed quote in input path.\n");
-                fprintf(stderr, "Type 'help' for more information.\n\n");
-                continue;
-            }
-            input_str = line.substr(pos, end_quote - pos);
-            pos = end_quote + 1;
-        }
-        else
-        {
-            // Unquoted path
-            size_t space_pos = line.find(' ', pos);
-            if (space_pos == std::string::npos)
-            {
-                fprintf(stderr, "🚨 Error: Invalid command format. Use: <input_path> <output_path>\n");
-                fprintf(stderr, "Type 'help' for more information.\n\n");
-                continue;
-            }
-            input_str = line.substr(pos, space_pos - pos);
-            pos = space_pos;
-        }
-        
-        // Skip whitespace between arguments
-        while (pos < line.length() && (line[pos] == ' ' || line[pos] == '\t'))
-        {
-            pos++;
-        }
-        
-        if (pos >= line.length())
-        {
-            fprintf(stderr, "🚨 Error: Output path is missing.\n");
-            fprintf(stderr, "Type 'help' for more information.\n\n");
-            continue;
-        }
-        
-        // Parse second argument (output path)
-        if (line[pos] == '"')
-        {
-            // Quoted path
-            pos++; // Skip opening quote
-            size_t end_quote = line.find('"', pos);
-            if (end_quote == std::string::npos)
-            {
-                fprintf(stderr, "🚨 Error: Unclosed quote in output path.\n");
-                fprintf(stderr, "Type 'help' for more information.\n\n");
-                continue;
-            }
-            output_str = line.substr(pos, end_quote - pos);
-        }
-        else
-        {
-            // Unquoted path (rest of the line)
-            output_str = line.substr(pos);
-        }
+        params = originalParams;
 
-        // Trim output string
-        size_t out_start = output_str.find_first_not_of(" \t");
-        if (out_start != std::string::npos)
+        auto tokens = split_cmdline(line);
+
+        std::vector<std::string> parsed_args;
+        parsed_args.emplace_back("upscayl");
+        parsed_args.insert(parsed_args.end(), tokens.begin(), tokens.end());
+
+        std::vector<char*> argv;
+        for (auto& a : parsed_args)
+            argv.push_back(a.data());
+        argv.push_back(nullptr);
+
+        int argc = static_cast<int>(argv.size() - 1);
+
+        // Reset getopt global state
+        optind = 1;
+        optarg = NULL;
+
+        std::string input_str, output_str;
+
+        int opt;
+        while ((opt = getopt(argc, argv.data(), "i:o:z:s:r:w:t:c:j:f:x")) != -1)
         {
-            output_str = output_str.substr(out_start);
+            switch (opt)
+            {
+            case 'i':
+                input_str = optarg;
+                break;
+            case 'o':
+                output_str = optarg;
+                break;
+            case 'z':
+                params.scale = atoi(optarg);
+                break;
+            case 's':
+                params.outputScale = atoi(optarg);
+                params.hasOutputScale = true;
+                break;
+            case 'c':
+                compression = atof(optarg);
+                if (compression < 0 || compression > 100)
+                {
+                    fprintf(stderr, "🚨 Error: Invalid compression value, it should be between 0 and 100!\n");
+                    return -1;
+                }
+                params.compression = round(compression / 10.0) * 10;
+                break;
+            case 'r':
+                if (strcmp(optarg, "help") == 0)
+                {
+                    print_resize_usage();
+                    return -1;
+                }
+                if (!parse_optarg_resize(optarg, &resizeWidth, &resizeHeight, &resizeMode))
+                {
+                    fprintf(stderr, "🚨 Error: Invalid resize value!\n");
+                    return -1;
+                }
+                params.resizeProvided = true;
+                params.resizeWidth = resizeWidth;
+                params.resizeHeight = resizeHeight;
+                params.resizeMode = resizeMode;
+                break;
+            case 'w':
+                if (strcmp(optarg, "help") == 0)
+                {
+                    print_resize_usage();
+                    return -1;
+                }
+                if (!parse_optarg_resize(optarg, &resizeWidth, &resizeHeight, &resizeMode, true))
+                {
+                    fprintf(stderr, "🚨 Error: Invalid resize value!\n");
+                    return -1;
+                }
+                params.hasCustomWidth = true;
+                params.resizeWidth = resizeWidth;
+                params.resizeHeight = resizeHeight;
+                params.resizeMode = resizeMode;
+                break;
+            case 't':
+                params.tilesize = parse_optarg_int_array(optarg);
+                break;
+            case 'j':
+                sscanf(optarg, "%d:%*[^:]:%d", &jobs_load, &jobs_save);
+                params.jobs_proc = parse_optarg_int_array(strchr(optarg, ':') + 1);
+                params.jobs_load = jobs_load;
+                params.jobs_save = jobs_save;
+                break;
+            case 'f':
+                params.format = optarg;
+                break;
+            case 'x':
+                params.tta_mode = 1;
+                break;
+            }
         }
 
         if (input_str.empty() || output_str.empty())
