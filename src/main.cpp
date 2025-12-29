@@ -1139,8 +1139,86 @@ static int run_daemon_mode(ProcessParams &params)
         optind = 1;
         optarg = NULL;
 
+#if _WIN32
+        std::wstring input_str, output_str;
+        wchar_t opt;
+        while ((opt = getopt(argc, argv.data(), L"i:o:z:s:r:w:t:c:j:f:x")) != (wchar_t)-1)
+        {
+            switch (opt)
+            {
+            case L'i':
+                input_str = optarg;
+                break;
+            case L'o':
+                output_str = optarg;
+                break;
+            case L'z':
+                params.scale = _wtoi(optarg);
+                break;
+            case L's':
+                params.outputScale = _wtoi(optarg);
+                params.hasOutputScale = true;
+                break;
+            case L'c':
+                compression = _wtof(optarg);
+                if (compression < 0 || compression > 100)
+                {
+                    fwprintf(stderr, L"🚨 Error: Invalid compression value, it should be between 0 and 100!\n");
+                    return -1;
+                }
+                params.compression = round(compression / 10.0f) * 10.0f;
+                break;
+            case L'r':
+                if (wcscmp(optarg, L"help") == 0)
+                {
+                    print_resize_usage();
+                    return -1;
+                }
+                if (!parse_optarg_resize(optarg, &resizeWidth, &resizeHeight, &resizeMode))
+                {
+                    fwprintf(stderr, L"🚨 Error: Invalid resize value!\n");
+                    return -1;
+                }
+                params.resizeProvided = true;
+                params.resizeWidth = resizeWidth;
+                params.resizeHeight = resizeHeight;
+                params.resizeMode = resizeMode;
+                break;
+            case L'w':
+                if (wcscmp(optarg, L"help") == 0)
+                {
+                    print_resize_usage();
+                    return -1;
+                }
+                if (!parse_optarg_resize(optarg, &resizeWidth, &resizeHeight, &resizeMode, true))
+                {
+                    fwprintf(stderr, L"🚨 Error: Invalid resize value!\n");
+                    return -1;
+                }
+                params.hasCustomWidth = true;
+                params.resizeWidth = resizeWidth;
+                params.resizeHeight = resizeHeight;
+                params.resizeMode = resizeMode;
+                break;
+            case L't':
+                params.tilesize = parse_optarg_int_array(optarg);
+                break;
+            case L'j':
+                swscanf(optarg, L"%d:%*[^:]:%d", &jobs_load, &jobs_save);
+                params.jobs_proc = parse_optarg_int_array(wcschr(optarg, L':') + 1);
+                params.jobs_load = jobs_load;
+                params.jobs_save = jobs_save;
+                break;
+            case L'f':
+                params.format = optarg;
+                break;
+            case L'x':
+                params.tta_mode = 1;
+                break;
+            }
+        }
+#else
         std::string input_str, output_str;
-
         int opt;
         while ((opt = getopt(argc, argv.data(), "i:o:z:s:r:w:t:c:j:f:x")) != -1)
         {
@@ -1217,22 +1295,16 @@ static int run_daemon_mode(ProcessParams &params)
                 break;
             }
         }
-
+#endif
+        
         if (input_str.empty() || output_str.empty())
         {
             fprintf(stderr, "🚨 Error: Both input and output paths are required.\n\n");
             continue;
         }
 
-#if _WIN32
-        // Convert to wstring for Windows
-        std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-        path_t inputpath = converter.from_bytes(input_str);
-        path_t outputpath = converter.from_bytes(output_str);
-#else
         path_t inputpath = input_str;
         path_t outputpath = output_str;
-#endif
 
         // Process the images with pre-loaded model
         int result = process_image_batch(inputpath, outputpath, params, realesrgan, prepadding);
@@ -1288,6 +1360,7 @@ int main(int argc, char **argv)
 #if _WIN32
     setlocale(LC_ALL, "");
     wchar_t opt;
+    fprintf(stderr, "🚀 Starting Upscayl - Copyright © 2024\n");
     while ((opt = getopt(argc, argv, L"i:o:z:s:r:w:t:c:m:n:g:j:f:vxhd")) != (wchar_t)-1)
     {
         switch (opt)
