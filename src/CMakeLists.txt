@@ -135,7 +135,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     option(NCNN_INT8 "" ON)
     option(NCNN_AVX "" ON)
     option(NCNN_FMA "" ON)
-    option(NCNN_AVX512 "" ON)
+    option(NCNN_AVX512 "" OFF)
 
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         add_compile_options(-mavx -mfma)
