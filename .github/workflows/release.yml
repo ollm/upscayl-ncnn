@@ -225,11 +225,6 @@ jobs:
           Invoke-WebRequest https://sdk.lunarg.com/sdk/download/${{ env.VK_VERSION }}/windows/vulkansdk-windows-X64-${{ env.VK_VERSION }}.exe -OutFile vk.exe
           .\vk.exe install --accept-licenses --default-answer --confirm-command --root C:\VulkanSDK
 
-      - name: Change NCNN version compatible with ARM64 build (Test if this fix performance issue in Windows)
-        run: |
-          git -C src/ncnn fetch origin 8b38cd8e0b4f31ea26deefaf5de0389c0e6eadf9
-          git -C src/ncnn checkout 8b38cd8e0b4f31ea26deefaf5de0389c0e6eadf9
-
       - name: Build
         run: |
           $env:VULKAN_SDK="C:\VulkanSDK"
