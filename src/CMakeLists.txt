@@ -131,6 +131,17 @@ if(USE_SYSTEM_NCNN)
     endif()
 endif()
 
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    option(NCNN_INT8 "" ON)
+    option(NCNN_AVX "" ON)
+    option(NCNN_FMA "" ON)
+    option(NCNN_AVX512 "" ON)
+
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        add_compile_options(-mavx -mfma)
+    endif()
+endif()
+
 if(NOT USE_SYSTEM_NCNN)
     # build ncnn library
     if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ncnn/CMakeLists.txt")
@@ -150,8 +161,8 @@ if(NOT USE_SYSTEM_NCNN)
     option(NCNN_BUILD_EXAMPLES "" OFF)
     option(NCNN_DISABLE_RTTI "" ON)
     option(NCNN_DISABLE_EXCEPTION "" ON)
-    option(NCNN_INT8 "" OFF)
-    option(NCNN_BF16 "" OFF)
+    option(NCNN_INT8 "" ON)
+    option(NCNN_BF16 "" ON)
 
     option(WITH_LAYER_absval "" OFF)
     option(WITH_LAYER_argmax "" OFF)
