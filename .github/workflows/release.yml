@@ -227,8 +227,8 @@ jobs:
 
       - name: Change NCNN version, the newest ones build but there are performance issue (AMD RX 6700)
         run: |
-          git -C src/ncnn fetch origin 9f832c19c170322ecd01749a6d129e7e915ccdb1
-          git -C src/ncnn checkout 9f832c19c170322ecd01749a6d129e7e915ccdb1
+          git -C src/ncnn fetch origin 091f7da5bab15814a3aad03c64174298d16b4074
+          git -C src/ncnn checkout 091f7da5bab15814a3aad03c64174298d16b4074
 
       - name: Build
         run: |
