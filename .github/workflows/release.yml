@@ -225,7 +225,8 @@ jobs:
           Invoke-WebRequest https://sdk.lunarg.com/sdk/download/${{ env.VK_VERSION }}/windows/vulkansdk-windows-X64-${{ env.VK_VERSION }}.exe -OutFile vk.exe
           .\vk.exe install --accept-licenses --default-answer --confirm-command --root C:\VulkanSDK
 
-      - name: Change NCNN version, the newest ones build but there are performance issue (AMD RX 6700)
+      - if: false
+        name: Change NCNN version, the newest ones build but there are performance issue (AMD RX 6700)
         run: |
           git -C src/ncnn fetch origin 8e69ddf707e12192147f558acabc06c60cd28773
           git -C src/ncnn checkout 8e69ddf707e12192147f558acabc06c60cd28773
