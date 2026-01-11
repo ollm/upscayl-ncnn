@@ -1089,10 +1089,22 @@ static int run_daemon_mode(ProcessParams &params)
     while (true)
     {
         fprintf(stderr, "📡 Ready> ");
+
+#if _WIN32
+        std::wstring wline;
+        if (!std::getline(std::wcin, wline))
+        {
+            break; // EOF or error
+        }
+
+        std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
+        line = conv.to_bytes(wline);
+#else
         if (!std::getline(std::cin, line))
         {
             break; // EOF or error
         }
+#endif
 
         // Trim leading/trailing whitespace
         size_t start = line.find_first_not_of(" \t\r\n");
@@ -1139,6 +1151,97 @@ static int run_daemon_mode(ProcessParams &params)
         optind = 1;
         optarg = NULL;
 
+#if _WIN32
+        std::wstring input_str, output_str;
+        wchar_t opt;
+
+        std::vector<std::wstring> wargs;
+        std::vector<wchar_t*> wargv;
+        std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
+
+        for (int i = 0; i < argc; i++)
+        {
+            std::wstring wstr = conv.from_bytes(argv[i]);
+            wargs.push_back(wstr);
+            wargv.push_back(wargs.back().data());
+        }
+        wargv.push_back(nullptr);
+        while ((opt = getopt(argc, wargv.data(), L"i:o:z:s:r:w:t:c:j:f:x")) != (wchar_t)-1)
+        {
+            switch (opt)
+            {
+            case L'i':
+                input_str = optarg;
+                break;
+            case L'o':
+                output_str = optarg;
+                break;
+            case L'z':
+                params.scale = _wtoi(optarg);
+                break;
+            case L's':
+                params.outputScale = _wtoi(optarg);
+                params.hasOutputScale = true;
+                break;
+            case L'c':
+                compression = _wtof(optarg);
+                if (compression < 0 || compression > 100)
+                {
+                    fwprintf(stderr, L"🚨 Error: Invalid compression value, it should be between 0 and 100!\n");
+                    return -1;
+                }
+                params.compression = round(compression / 10.0f) * 10.0f;
+                break;
+            case L'r':
+                if (wcscmp(optarg, L"help") == 0)
+                {
+                    print_resize_usage();
+                    return -1;
+                }
+                if (!parse_optarg_resize(optarg, &resizeWidth, &resizeHeight, &resizeMode))
+                {
+                    fwprintf(stderr, L"🚨 Error: Invalid resize value!\n");
+                    return -1;
+                }
+                params.resizeProvided = true;
+                params.resizeWidth = resizeWidth;
+                params.resizeHeight = resizeHeight;
+                params.resizeMode = resizeMode;
+                break;
+            case L'w':
+                if (wcscmp(optarg, L"help") == 0)
+                {
+                    print_resize_usage();
+                    return -1;
+                }
+                if (!parse_optarg_resize(optarg, &resizeWidth, &resizeHeight, &resizeMode, true))
+                {
+                    fwprintf(stderr, L"🚨 Error: Invalid resize value!\n");
+                    return -1;
+                }
+                params.hasCustomWidth = true;
+                params.resizeWidth = resizeWidth;
+                params.resizeHeight = resizeHeight;
+                params.resizeMode = resizeMode;
+                break;
+            case L't':
+                params.tilesize = parse_optarg_int_array(optarg);
+                break;
+            case L'j':
+                swscanf(optarg, L"%d:%*[^:]:%d", &jobs_load, &jobs_save);
+                params.jobs_proc = parse_optarg_int_array(wcschr(optarg, L':') + 1);
+                params.jobs_load = jobs_load;
+                params.jobs_save = jobs_save;
+                break;
+            case L'f':
+                params.format = optarg;
+                break;
+            case L'x':
+                params.tta_mode = 1;
+                break;
+            }
+        }
+#else
         std::string input_str, output_str;
         int opt;
         while ((opt = getopt(argc, argv.data(), "i:o:z:s:r:w:t:c:j:f:x")) != -1)
@@ -1216,6 +1319,7 @@ static int run_daemon_mode(ProcessParams &params)
                 break;
             }
         }
+#endif
         
         if (input_str.empty() || output_str.empty())
         {
