@@ -247,7 +247,6 @@ static void print_daemon_help()
     fprintf(stderr, "Commands:\n");
     fprintf(stderr, "  -i input-path        input image path (jpg/png/webp) or directory\n");
     fprintf(stderr, "  -o output-path       output image path (jpg/png/webp) or directory\n");
-    fprintf(stderr, "  -z model-scale       scale according to the model (can be 2, 3, 4. default=4)\n");
     fprintf(stderr, "  -s output-scale      custom output scale (can be 2, 3, 4. default=4)\n");
     fprintf(stderr, "  -r resize            resize output to dimension (default=WxH:default), use '-r help' for more details\n");
     fprintf(stderr, "  -w width             resize output to a width (default=W:default), use '-r help' for more details\n");
@@ -1169,7 +1168,7 @@ static int run_daemon_mode(ProcessParams &params)
             wargv.push_back(a.data());
         }
         wargv.push_back(nullptr);
-        while ((opt = getopt(argc, wargv.data(), L"i:o:z:s:r:w:t:c:j:f:x")) != (wchar_t)-1)
+        while ((opt = getopt(argc, wargv.data(), L"i:o:s:r:w:t:c:j:f:x")) != (wchar_t)-1)
         {
             switch (opt)
             {
@@ -1178,9 +1177,6 @@ static int run_daemon_mode(ProcessParams &params)
                 break;
             case L'o':
                 output_str = optarg;
-                break;
-            case L'z':
-                params.scale = _wtoi(optarg);
                 break;
             case L's':
                 params.outputScale = _wtoi(optarg);
@@ -1247,7 +1243,7 @@ static int run_daemon_mode(ProcessParams &params)
 #else
         std::string input_str, output_str;
         int opt;
-        while ((opt = getopt(argc, argv.data(), "i:o:z:s:r:w:t:c:j:f:x")) != -1)
+        while ((opt = getopt(argc, argv.data(), "i:o:s:r:w:t:c:j:f:x")) != -1)
         {
             switch (opt)
             {
@@ -1256,9 +1252,6 @@ static int run_daemon_mode(ProcessParams &params)
                 break;
             case 'o':
                 output_str = optarg;
-                break;
-            case 'z':
-                params.scale = atoi(optarg);
                 break;
             case 's':
                 params.outputScale = atoi(optarg);
