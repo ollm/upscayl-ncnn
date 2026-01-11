@@ -1157,10 +1157,10 @@ static int run_daemon_mode(ProcessParams &params)
 
         std::vector<std::wstring> wargs;
         std::vector<wchar_t*> wargv;
-        std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
 
         for (int i = 0; i < argc; i++)
         {
+            std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
             std::wstring wstr = conv.from_bytes(argv[i]);
             wargs.push_back(wstr);
             wargv.push_back(wargs.back().data());
