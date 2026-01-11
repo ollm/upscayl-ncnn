@@ -1142,18 +1142,7 @@ static int run_daemon_mode(ProcessParams &params)
 #if _WIN32
         std::wstring input_str, output_str;
         wchar_t opt;
-        // Convert to wchar_t** for getopt on Windows
-        std::vector<std::wstring> wargs;
-        std::vector<wchar_t*> wargv;
-        for (int i = 0; i < argc; i++)
-        {
-            std::string str(argv[i]);
-            std::wstring wstr(str.begin(), str.end());
-            wargs.push_back(wstr);
-            wargv.push_back(wargs.back().data());
-        }
-        wargv.push_back(nullptr);
-        while ((opt = getopt(argc, wargv.data(), L"i:o:z:s:r:w:t:c:j:f:x")) != (wchar_t)-1)
+        while ((opt = getopt(argc, argv.data(), L"i:o:z:s:r:w:t:c:m:n:g:j:f:vxhd")) != (wchar_t)-1)
         {
             switch (opt)
             {
