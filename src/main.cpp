@@ -1006,34 +1006,6 @@ std::vector<std::string> split_cmdline(const std::string& cmd) {
     return args;
 }
 
-#if _WIN32
-std::vector<std::wstring> split_cmdline_wide(const std:: wstring& cmd) {
-    std::vector<std::wstring> args;
-    std::wstring current;
-    bool in_quotes = false;
-
-    for (size_t i = 0; i < cmd.size(); ++i) {
-        wchar_t c = cmd[i];
-
-        if (c == L'"') {
-            in_quotes = ! in_quotes;
-        } else if (std::iswspace(c) && !in_quotes) {
-            if (! current.empty()) {
-                args.push_back(current);
-                current.clear();
-            }
-        } else {
-            current += c;
-        }
-    }
-
-    if (!current.empty())
-        args.push_back(current);
-
-    return args;
-}
-#endif
-
 static int run_daemon_mode(ProcessParams &params)
 {
     fprintf(stderr, "\n📡 Daemon Mode Started\n");
@@ -1113,33 +1085,18 @@ static int run_daemon_mode(ProcessParams &params)
 #endif
     fprintf(stderr, "Type 'help' for usage or 'quit' to exit\n\n");
 
-#if _WIN32
-    std:: wstring line;
-#else
     std::string line;
-#endif
-
     while (true)
     {
         fprintf(stderr, "📡 Ready> ");
-        
-#if _WIN32
-        if (!std::getline(std::wcin, line))
-#else
         if (!std::getline(std::cin, line))
-#endif
         {
             break; // EOF or error
         }
 
         // Trim leading/trailing whitespace
-#if _WIN32
-        size_t start = line.find_first_not_of(L" \t\r\n");
-        size_t end = line.find_last_not_of(L" \t\r\n");
-#else
         size_t start = line.find_first_not_of(" \t\r\n");
-        size_t end = line. find_last_not_of(" \t\r\n");
-#endif
+        size_t end = line.find_last_not_of(" \t\r\n");
         if (start == std::string::npos)
         {
             continue; // Empty line
@@ -1151,21 +1108,13 @@ static int run_daemon_mode(ProcessParams &params)
             continue;
         }
 
-#if _WIN32
-        if (line == L"quit" || line == L"exit")
-#else
         if (line == "quit" || line == "exit")
-#endif
         {
             fprintf(stderr, "👋 Exiting daemon mode...\n");
             break;
         }
 
-#if _WIN32
-        if (line == L"help")
-#else
         if (line == "help")
-#endif
         {
             print_daemon_help();
             continue;
@@ -1173,20 +1122,13 @@ static int run_daemon_mode(ProcessParams &params)
 
         params = originalParams;
 
-#if _WIN32
-        auto tokens = split_cmdline_wide(line);
-        std::vector<std::wstring> parsed_args;
-        parsed_args.emplace_back(L"upscayl");
-        parsed_args. insert(parsed_args.end(), tokens.begin(), tokens.end());
-        std::vector<wchar_t*> argv;
-#else
         auto tokens = split_cmdline(line);
+
         std::vector<std::string> parsed_args;
         parsed_args.emplace_back("upscayl");
         parsed_args.insert(parsed_args.end(), tokens.begin(), tokens.end());
-        std::vector<char*> argv;
-#endif
 
+        std::vector<char*> argv;
         for (auto& a : parsed_args)
             argv.push_back(a.data());
         argv.push_back(nullptr);
@@ -1197,85 +1139,6 @@ static int run_daemon_mode(ProcessParams &params)
         optind = 1;
         optarg = NULL;
 
-#if _WIN32
-        std::wstring input_str, output_str;
-        wchar_t opt;
-        while ((opt = getopt(argc, argv.data(), L"i:o:z:s:r:w:t:c:j:f:x")) != (wchar_t)-1)
-        {
-            switch (opt)
-            {
-            case L'i':
-                input_str = optarg;
-                break;
-            case L'o':
-                output_str = optarg;
-                break;
-            case L'z':
-                params.scale = _wtoi(optarg);
-                break;
-            case L's':
-                params.outputScale = _wtoi(optarg);
-                params.hasOutputScale = true;
-                break;
-            case L'c':
-                compression = _wtof(optarg);
-                if (compression < 0 || compression > 100)
-                {
-                    fwprintf(stderr, L"🚨 Error: Invalid compression value, it should be between 0 and 100!\n");
-                    return -1;
-                }
-                params.compression = round(compression / 10.0f) * 10.0f;
-                break;
-            case L'r':
-                if (wcscmp(optarg, L"help") == 0)
-                {
-                    print_resize_usage();
-                    return -1;
-                }
-                if (!parse_optarg_resize(optarg, &resizeWidth, &resizeHeight, &resizeMode))
-                {
-                    fwprintf(stderr, L"🚨 Error: Invalid resize value!\n");
-                    return -1;
-                }
-                params.resizeProvided = true;
-                params.resizeWidth = resizeWidth;
-                params.resizeHeight = resizeHeight;
-                params.resizeMode = resizeMode;
-                break;
-            case L'w':
-                if (wcscmp(optarg, L"help") == 0)
-                {
-                    print_resize_usage();
-                    return -1;
-                }
-                if (!parse_optarg_resize(optarg, &resizeWidth, &resizeHeight, &resizeMode, true))
-                {
-                    fwprintf(stderr, L"🚨 Error: Invalid resize value!\n");
-                    return -1;
-                }
-                params.hasCustomWidth = true;
-                params.resizeWidth = resizeWidth;
-                params.resizeHeight = resizeHeight;
-                params.resizeMode = resizeMode;
-                break;
-            case L't':
-                params.tilesize = parse_optarg_int_array(optarg);
-                break;
-            case L'j':
-                swscanf(optarg, L"%d:%*[^:]:%d", &jobs_load, &jobs_save);
-                params.jobs_proc = parse_optarg_int_array(wcschr(optarg, L':') + 1);
-                params.jobs_load = jobs_load;
-                params.jobs_save = jobs_save;
-                break;
-            case L'f':
-                params.format = optarg;
-                break;
-            case L'x':
-                params.tta_mode = 1;
-                break;
-            }
-        }
-#else
         std::string input_str, output_str;
         int opt;
         while ((opt = getopt(argc, argv.data(), "i:o:z:s:r:w:t:c:j:f:x")) != -1)
@@ -1353,7 +1216,6 @@ static int run_daemon_mode(ProcessParams &params)
                 break;
             }
         }
-#endif
         
         if (input_str.empty() || output_str.empty())
         {
@@ -1384,7 +1246,6 @@ static int run_daemon_mode(ProcessParams &params)
 
     return 0;
 }
-
 
 #if _WIN32
 int wmain(int argc, wchar_t **argv)
