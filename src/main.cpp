@@ -1089,10 +1089,22 @@ static int run_daemon_mode(ProcessParams &params)
     while (true)
     {
         fprintf(stderr, "📡 Ready> ");
+
+#if _WIN32
+        std::wstring wline;
+        if (!std::getline(std::wcin, wline))
+        {
+            break; // EOF or error
+        }
+
+        std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv1;
+        line = conv1.to_bytes(wline);
+#else
         if (!std::getline(std::cin, line))
         {
             break; // EOF or error
         }
+#endif
 
         // Trim leading/trailing whitespace
         size_t start = line.find_first_not_of(" \t\r\n");
@@ -1142,15 +1154,19 @@ static int run_daemon_mode(ProcessParams &params)
 #if _WIN32
         std::wstring input_str, output_str;
         wchar_t opt;
-        // Convert to wchar_t** for getopt on Windows
+
         std::vector<std::wstring> wargs;
-        std::vector<wchar_t*> wargv;
+        std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv2;
+
         for (int i = 0; i < argc; i++)
         {
-            std::string str(argv[i]);
-            std::wstring wstr(str.begin(), str.end());
-            wargs.push_back(wstr);
-            wargv.push_back(wargs.back().data());
+            wargs.push_back(conv2.from_bytes(argv[i]));
+        }
+        
+        std::vector<wchar_t*> wargv;
+        for (auto& a : wargs)
+        {
+            wargv.push_back(a.data());
         }
         wargv.push_back(nullptr);
         while ((opt = getopt(argc, wargv.data(), L"i:o:z:s:r:w:t:c:j:f:x")) != (wchar_t)-1)
