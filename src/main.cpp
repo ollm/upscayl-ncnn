@@ -1155,15 +1155,18 @@ static int run_daemon_mode(ProcessParams &params)
         std::wstring input_str, output_str;
         wchar_t opt;
 
-        std::vector<std::wstring> wargs;
-        std::vector<wchar_t*> wargv;
-        std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv2;
+        std::vector<std:: wstring> wargs;
+        std:: wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv2;
 
         for (int i = 0; i < argc; i++)
         {
-            std::wstring wstr = conv2.from_bytes(argv[i]);
-            wargs.push_back(wstr);
-            wargv.push_back(wargs.back().data());
+            wargs.push_back(conv2.from_bytes(argv[i]));
+        }
+        
+        std::vector<wchar_t*> wargv;
+        for (auto& a : wargs)
+        {
+            wargv.push_back(a.data());
         }
         wargv.push_back(nullptr);
         while ((opt = getopt(argc, wargv.data(), L"i:o:z:s:r:w:t:c:j:f:x")) != (wchar_t)-1)
