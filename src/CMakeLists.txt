@@ -299,6 +299,7 @@ if(NOT USE_SYSTEM_WEBP)
     option(WEBP_BUILD_WEBP_JS "" OFF)
     option(WEBP_NEAR_LOSSLESS "" OFF)
     option(WEBP_ENABLE_SWAP_16BIT_CSP "" OFF)
+    option(WEBP_ENABLE_AVX2 ON)
 
     add_subdirectory(libwebp)
 
