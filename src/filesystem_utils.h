@@ -176,13 +176,10 @@ static path_t get_executable_directory()
 static path_t get_executable_directory()
 {
     char filepath[256];
-    ssize_t len = readlink("/proc/self/exe", filepath, sizeof(filepath) - 1);
-    if (len != -1)
-        filepath[len] = '\0';
+    readlink("/proc/self/exe", filepath, 256);
 
     char *slash = strrchr(filepath, '/');
-    if (slash != nullptr)
-        slash[1] = '\0';
+    slash[1] = '\0';
 
     return path_t(filepath);
 }
