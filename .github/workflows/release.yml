@@ -259,16 +259,11 @@ jobs:
           Invoke-WebRequest https://sdk.lunarg.com/sdk/download/${{ env.VK_VERSION }}/warm/vulkansdk-windows-ARM64-${{ env.VK_VERSION }}.exe -OutFile vk.exe
           .\vk.exe install --accept-licenses --default-answer --confirm-command --root C:\VulkanSDK
 
-      - name: Change NCNN version compatible with ARM64 build
-        run: |
-          git -C src/ncnn fetch origin 8b38cd8e0b4f31ea26deefaf5de0389c0e6eadf9
-          git -C src/ncnn checkout 8b38cd8e0b4f31ea26deefaf5de0389c0e6eadf9
-
       - name: Build
         run: |
           $env:VULKAN_SDK="C:\VulkanSDK"
           mkdir build; cd build
-          cmake -A arm64 ../src -G "Visual Studio 17 2022"
+          cmake -A arm64 -DNCNN_COMPILER_SUPPORT_ARM82_FP16=OFF ../src -G "Visual Studio 17 2022"
           cmake --build . --config Release
 
       - name: Package
