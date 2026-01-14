@@ -2,7 +2,12 @@ name: release
 
 on:
   workflow_dispatch:
-
+  workflow_call:
+    inputs:
+      create_release:
+        type: boolean
+        default: true
+        description: 'Create GitHub release'
 env:
   APPLICATION_NAME: upscayl-bin
   VK_VERSION: 1.4.335.0
@@ -279,6 +284,7 @@ jobs:
 
   # ---------------- GitHub Release ----------------
   release:
+    if: ${{ inputs.create_release != false }}
     needs: [ubuntu, ubuntu-arm64, macos-universal, windows, windows-arm64, setup]
     runs-on: ubuntu-latest
     steps:
