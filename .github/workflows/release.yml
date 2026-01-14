@@ -2,7 +2,12 @@ name: release
 
 on:
   workflow_dispatch:
-
+  workflow_call:
+    inputs:
+      create_release:
+        type: boolean
+        default: true
+        description: 'Create GitHub release'
 env:
   APPLICATION_NAME: upscayl-bin
   VK_VERSION: 1.4.335.0
@@ -259,12 +264,6 @@ jobs:
           Invoke-WebRequest https://sdk.lunarg.com/sdk/download/${{ env.VK_VERSION }}/warm/vulkansdk-windows-ARM64-${{ env.VK_VERSION }}.exe -OutFile vk.exe
           .\vk.exe install --accept-licenses --default-answer --confirm-command --root C:\VulkanSDK
 
-      - if: false # Temporarily disabled to test @hmartinez82 solution
-        name: Change NCNN version compatible with ARM64 build
-        run: |
-          git -C src/ncnn fetch origin 8b38cd8e0b4f31ea26deefaf5de0389c0e6eadf9
-          git -C src/ncnn checkout 8b38cd8e0b4f31ea26deefaf5de0389c0e6eadf9
-
       - name: Build
         run: |
           $env:VULKAN_SDK="C:\VulkanSDK"
@@ -285,6 +284,7 @@ jobs:
 
   # ---------------- GitHub Release ----------------
   release:
+    if: ${{ inputs.create_release != false }}
     needs: [ubuntu, ubuntu-arm64, macos-universal, windows, windows-arm64, setup]
     runs-on: ubuntu-latest
     steps:
