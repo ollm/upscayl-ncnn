@@ -2,6 +2,11 @@ name: release
 
 on:
   workflow_dispatch:
+    inputs:
+      create_release:
+        type: boolean
+        default: true
+        description: 'Create GitHub release'
   workflow_call:
     inputs:
       create_release:
@@ -284,7 +289,7 @@ jobs:
 
   # ---------------- GitHub Release ----------------
   release:
-    if: ${{ inputs.create_release != false }}
+    if: ${{ inputs.create_release }}
     needs: [ubuntu, ubuntu-arm64, macos-universal, windows, windows-arm64, setup]
     runs-on: ubuntu-latest
     steps:

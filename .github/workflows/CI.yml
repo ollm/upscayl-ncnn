@@ -6,4 +6,4 @@ jobs:
   build:
     uses: ./.github/workflows/release.yml
     with:
-      create_release:  false
+      create_release: false
