@@ -13,7 +13,7 @@
 class RealESRGAN
 {
 public:
-    RealESRGAN(int gpuid, bool tta_mode = false);
+    RealESRGAN(int gpuid, bool tta_mode = false, bool fp32_mode = false);
     ~RealESRGAN();
 
 #if _WIN32
@@ -40,6 +40,7 @@ private:
     ncnn::Layer *bicubic_3x;
     ncnn::Layer *bicubic_4x;
     bool tta_mode;
+    bool fp32_mode;
 };
 
 #endif // REALESRGAN_H

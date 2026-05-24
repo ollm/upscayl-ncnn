@@ -218,6 +218,8 @@ static void print_usage()
     fprintf(stderr, "  -g gpu-id            gpu device to use (default=auto) can be 0,1,2 for multi-gpu\n");
     fprintf(stderr, "  -j load:proc:save    thread count for load/proc/save (default=1:2:2) can be 1:2,2,2:2 for multi-gpu\n");
     fprintf(stderr, "  -x                   enable tta mode\n");
+    fprintf(stderr, "  -p                   force fp32 path (disable fp16/int8 storage)\n");
+    fprintf(stderr, "  --diagnose-model     validate model compatibility only (no image processing)\n");
     fprintf(stderr, "  -f format            output image format (jpg/png/webp, default=ext/png)\n");
     fprintf(stderr, "  -v                   verbose output\n");
 }
@@ -254,6 +256,7 @@ static void print_daemon_help()
     fprintf(stderr, "  -t tile-size         tile size (>=32/0=auto, default=0) can be 0,0,0 for multi-gpu\n");
     fprintf(stderr, "  -j load:proc:save    thread count for load/proc/save (default=1:2:2) can be 1:2,2,2:2 for multi-gpu\n");
     fprintf(stderr, "  -x                   enable tta mode\n");
+    fprintf(stderr, "  -p                   force fp32 path (disable fp16/int8 storage)\n");
     fprintf(stderr, "  -f format            output image format (jpg/png/webp, default=ext/png)\n");
     fprintf(stderr, "  help                 Show this help message\n");
     fprintf(stderr, "  quit or exit         Exit daemon mode\n\n");
@@ -452,7 +455,6 @@ void *load(void *args)
                     }
 #endif // _WIN32
                 }
-
                 free(filedata);
             }
         }
@@ -514,7 +516,17 @@ void *proc(void *args)
         if (v.id == -233)
             break;
 
-        realesrgan->process(v.inimage, v.outimage);
+        int ret = realesrgan->process(v.inimage, v.outimage);
+        if (ret != 0)
+        {
+#if _WIN32
+            fwprintf(stderr, L"🚨 Error: Inference failed for '%s' (code=%d)\n", v.inpath.c_str(), ret);
+#else
+            fprintf(stderr, "🚨 Error: Inference failed for '%s' (code=%d)\n", v.inpath.c_str(), ret);
+#endif
+            fprintf(stderr, "   Reason: model/backend incompatibility or invalid model blobs.\n");
+            continue;
+        }
 
         tosave.put(v);
     }
@@ -786,6 +798,7 @@ struct ProcessParams
     int jobs_save;
     int verbose;
     int tta_mode;
+    int fp32_mode;
     path_t format;
 };
 
@@ -796,7 +809,7 @@ static ProcessParams create_process_params(
     const std::vector<int> &tilesize, const path_t &model,
     const path_t &modelname, const std::vector<int> &gpuid,
     int jobs_load, const std::vector<int> &jobs_proc, int jobs_save,
-    int verbose, int tta_mode, const path_t &format)
+    int verbose, int tta_mode, int fp32_mode, const path_t &format)
 {
     ProcessParams params;
     params.scale = scale;
@@ -817,6 +830,7 @@ static ProcessParams create_process_params(
     params.jobs_save = jobs_save;
     params.verbose = verbose;
     params.tta_mode = tta_mode;
+    params.fp32_mode = fp32_mode;
     params.format = format;
     return params;
 }
@@ -1068,10 +1082,29 @@ static int run_daemon_mode(ProcessParams &params)
     std::vector<RealESRGAN *> realesrgan(use_gpu_count);
 
     fprintf(stderr, "🔧 Loading model...\n");
+    if (params.fp32_mode)
+    {
+        fprintf(stderr, "⚙️ FP32 mode enabled (-p): fp16/int8 storage disabled\n");
+    }
     for (int i = 0; i < use_gpu_count; i++)
     {
-        realesrgan[i] = new RealESRGAN(params.gpuid[i], params.tta_mode);
-        realesrgan[i]->load(paramfullpath, modelfullpath);
+        realesrgan[i] = new RealESRGAN(params.gpuid[i], params.tta_mode, params.fp32_mode);
+        int ret = realesrgan[i]->load(paramfullpath, modelfullpath);
+        if (ret != 0)
+        {
+#if _WIN32
+            fwprintf(stderr, L"🚨 Error: Failed to load model '%s' (code=%d)\n", params.modelname.c_str(), ret);
+#else
+            fprintf(stderr, "🚨 Error: Failed to load model '%s' (code=%d)\n", params.modelname.c_str(), ret);
+#endif
+            fprintf(stderr, "   Reason: model is likely incompatible with this ncnn build/runtime or param/bin files are mismatched.\n");
+
+            for (int j = 0; j <= i; j++)
+            {
+                delete realesrgan[j];
+            }
+            return -1;
+        }
         realesrgan[i]->scale = params.scale;
         realesrgan[i]->tilesize = params.tilesize[i];
         realesrgan[i]->prepadding = prepadding;
@@ -1168,7 +1201,7 @@ static int run_daemon_mode(ProcessParams &params)
             wargv.push_back(a.data());
         }
         wargv.push_back(nullptr);
-        while ((opt = getopt(argc, wargv.data(), L"i:o:s:r:w:t:c:j:f:x")) != (wchar_t)-1)
+        while ((opt = getopt(argc, wargv.data(), L"i:o:s:r:w:t:c:j:f:xp")) != (wchar_t)-1)
         {
             switch (opt)
             {
@@ -1238,12 +1271,15 @@ static int run_daemon_mode(ProcessParams &params)
             case L'x':
                 params.tta_mode = 1;
                 break;
+            case L'p':
+                params.fp32_mode = 1;
+                break;
             }
         }
 #else
         std::string input_str, output_str;
         int opt;
-        while ((opt = getopt(argc, argv.data(), "i:o:s:r:w:t:c:j:f:x")) != -1)
+        while ((opt = getopt(argc, argv.data(), "i:o:s:r:w:t:c:j:f:xp")) != -1)
         {
             switch (opt)
             {
@@ -1313,6 +1349,9 @@ static int run_daemon_mode(ProcessParams &params)
             case 'x':
                 params.tta_mode = 1;
                 break;
+            case 'p':
+                params.fp32_mode = 1;
+                break;
             }
         }
 #endif
@@ -1374,14 +1413,52 @@ int main(int argc, char **argv)
     int jobs_save = 2;
     int verbose = 0;
     int tta_mode = 0;
+    int fp32_mode = 0;
+    bool diagnose_model = false;
     path_t format = PATHSTR("png");
     bool daemon_mode = false;
+
+#if _WIN32
+    // Handle long-only options before getopt
+    {
+        int new_argc = 1;
+        for (int i = 1; i < argc; i++)
+        {
+            if (wcscmp(argv[i], L"--diagnose-model") == 0)
+            {
+                diagnose_model = true;
+                continue;
+            }
+
+            argv[new_argc++] = argv[i];
+        }
+        argc = new_argc;
+        argv[argc] = nullptr;
+    }
+#else
+    // Handle long-only options before getopt
+    {
+        int new_argc = 1;
+        for (int i = 1; i < argc; i++)
+        {
+            if (strcmp(argv[i], "--diagnose-model") == 0)
+            {
+                diagnose_model = true;
+                continue;
+            }
+
+            argv[new_argc++] = argv[i];
+        }
+        argc = new_argc;
+        argv[argc] = nullptr;
+    }
+#endif
 
 #if _WIN32
     setlocale(LC_ALL, "");
     wchar_t opt;
     fprintf(stderr, "🚀 Starting Upscayl - Copyright © 2024\n");
-    while ((opt = getopt(argc, argv, L"i:o:z:s:r:w:t:c:m:n:g:j:f:vxhd")) != (wchar_t)-1)
+    while ((opt = getopt(argc, argv, L"i:o:z:s:r:w:t:c:m:n:g:j:f:vxphd")) != (wchar_t)-1)
     {
         switch (opt)
         {
@@ -1458,6 +1535,9 @@ int main(int argc, char **argv)
         case L'x':
             tta_mode = 1;
             break;
+        case L'p':
+            fp32_mode = 1;
+            break;
         case L'd':
             daemon_mode = true;
             break;
@@ -1470,7 +1550,7 @@ int main(int argc, char **argv)
 #else  // _WIN32
     int opt;
     fprintf(stderr, "🚀 Starting Upscayl - Copyright © 2024\n");
-    while ((opt = getopt(argc, argv, "i:o:z:s:r:w:t:c:m:n:g:j:f:vxhd")) != -1)
+    while ((opt = getopt(argc, argv, "i:o:z:s:r:w:t:c:m:n:g:j:f:vxphd")) != -1)
     {
         switch (opt)
         {
@@ -1547,6 +1627,9 @@ int main(int argc, char **argv)
         case 'x':
             tta_mode = 1;
             break;
+        case 'p':
+            fp32_mode = 1;
+            break;
         case 'd':
             daemon_mode = true;
             break;
@@ -1557,7 +1640,13 @@ int main(int argc, char **argv)
         }
     }
 #endif // _WIN32
-    if (!daemon_mode && (inputpath.empty() || outputpath.empty()))
+
+    if (fp32_mode)
+    {
+        fprintf(stderr, "⚙️ FP32 mode enabled (-p): fp16/int8 storage disabled\n");
+    }
+
+    if (!diagnose_model && !daemon_mode && (inputpath.empty() || outputpath.empty()))
     {
         print_usage();
         return -1;
@@ -1599,7 +1688,7 @@ int main(int argc, char **argv)
         }
     }
 
-    if (!daemon_mode && !path_is_directory(outputpath))
+    if (!diagnose_model && !daemon_mode && !path_is_directory(outputpath))
     {
         path_t ext = format;
 
@@ -1628,10 +1717,10 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    // collect input and output filepath (skip in daemon mode)
+    // collect input and output filepath (skip in daemon/diagnose mode)
     std::vector<path_t> input_files;
     std::vector<path_t> output_files;
-    if (!daemon_mode)
+    if (!daemon_mode && !diagnose_model)
     {
         if (path_is_directory(inputpath) && path_is_directory(outputpath))
         {
@@ -1846,6 +1935,86 @@ int main(int argc, char **argv)
         }
     }
 
+    if (diagnose_model)
+    {
+        fprintf(stderr, "🧪 Diagnose mode enabled (--diagnose-model)\n");
+#if _WIN32
+        fwprintf(stderr, L"Model param: %s\n", paramfullpath.c_str());
+        fwprintf(stderr, L"Model bin: %s\n", modelfullpath.c_str());
+#else
+        fprintf(stderr, "Model param: %s\n", paramfullpath.c_str());
+        fprintf(stderr, "Model bin: %s\n", modelfullpath.c_str());
+#endif
+
+        bool ok = true;
+        int failed_gpu = -1;
+        int failed_code = 0;
+        const char *failed_reason = "";
+        for (int i = 0; i < use_gpu_count; i++)
+        {
+            fprintf(stderr, "🔎 Checking model on GPU %d...\n", gpuid[i]);
+
+            RealESRGAN diagnostic(gpuid[i], tta_mode, fp32_mode);
+            int ret = diagnostic.load(paramfullpath, modelfullpath);
+            if (ret != 0)
+            {
+                ok = false;
+                failed_gpu = gpuid[i];
+                failed_code = ret;
+                failed_reason = "unsupported_layers_or_mismatched_param_bin";
+#if _WIN32
+                fwprintf(stderr, L"❌ Model diagnostic failed for '%s' on GPU %d (code=%d)\n", modelname.c_str(), gpuid[i], ret);
+#else
+                fprintf(stderr, "❌ Model diagnostic failed for '%s' on GPU %d (code=%d)\n", modelname.c_str(), gpuid[i], ret);
+#endif
+                fprintf(stderr, "   Reason: model may contain unsupported layers/ops for this runtime or mismatched param/bin.\n");
+                break;
+            }
+
+            diagnostic.scale = scale;
+            diagnostic.tilesize = tilesize[i];
+            diagnostic.prepadding = prepadding;
+
+            // Runtime dry-run to catch extract/backend incompatibilities that load() alone cannot detect.
+            const int test_w = 64;
+            const int test_h = 64;
+            std::vector<unsigned char> test_pixels(test_w * test_h * 3, 127);
+            ncnn::Mat test_in(test_w, test_h, (void *)test_pixels.data(), (size_t)3u, 3);
+            ncnn::Mat test_out(test_w * scale, test_h * scale, (size_t)3u, 3);
+
+            ret = diagnostic.process(test_in, test_out);
+            if (ret != 0)
+            {
+                ok = false;
+                failed_gpu = gpuid[i];
+                failed_code = ret;
+                failed_reason = "runtime_extract_or_backend_failure";
+#if _WIN32
+                fwprintf(stderr, L"❌ Model runtime dry-run failed for '%s' on GPU %d (code=%d)\n", modelname.c_str(), gpuid[i], ret);
+#else
+                fprintf(stderr, "❌ Model runtime dry-run failed for '%s' on GPU %d (code=%d)\n", modelname.c_str(), gpuid[i], ret);
+#endif
+                fprintf(stderr, "   Reason: model loads but cannot execute with current runtime/backend settings.\n");
+                break;
+            }
+
+            fprintf(stderr, "✅ Model load + runtime dry-run passed on GPU %d\n", gpuid[i]);
+        }
+
+        if (ok)
+        {
+            fprintf(stderr, "✅ Diagnose complete: model appears compatible with current runtime settings.\n");
+            fprintf(stdout, "COMPATIBLE\n");
+        }
+        else
+        {
+            fprintf(stdout, "INCOMPATIBLE: reason=%s gpu=%d code=%d\n", failed_reason, failed_gpu, failed_code);
+        }
+
+        ncnn::destroy_gpu_instance();
+        return ok ? 0 : -1;
+    }
+
     // Branch between daemon mode and single-run mode
     if (daemon_mode)
     {
@@ -1855,7 +2024,7 @@ int main(int argc, char **argv)
             outputScale, hasOutputScale, compression,
             resizeProvided, hasCustomWidth, tilesize, model,
             modelname, gpuid, jobs_load, jobs_proc, jobs_save,
-            verbose, tta_mode, format);
+            verbose, tta_mode, fp32_mode, format);
 
         int result = run_daemon_mode(params);
         
@@ -1871,14 +2040,31 @@ int main(int argc, char **argv)
             outputScale, hasOutputScale, compression,
             resizeProvided, hasCustomWidth, tilesize, model,
             modelname, gpuid, jobs_load, jobs_proc, jobs_save,
-            verbose, tta_mode, format);
+            verbose, tta_mode, fp32_mode, format);
 
         std::vector<RealESRGAN *> realesrgan(use_gpu_count);
 
         for (int i = 0; i < use_gpu_count; i++)
         {
-            realesrgan[i] = new RealESRGAN(gpuid[i], tta_mode);
-            realesrgan[i]->load(paramfullpath, modelfullpath);
+            realesrgan[i] = new RealESRGAN(gpuid[i], tta_mode, fp32_mode);
+            int ret = realesrgan[i]->load(paramfullpath, modelfullpath);
+            if (ret != 0)
+            {
+#if _WIN32
+                fwprintf(stderr, L"🚨 Error: Failed to load model '%s' (code=%d)\n", modelname.c_str(), ret);
+#else
+                fprintf(stderr, "🚨 Error: Failed to load model '%s' (code=%d)\n", modelname.c_str(), ret);
+#endif
+                fprintf(stderr, "   Reason: model is likely incompatible with this ncnn build/runtime or param/bin files are mismatched.\n");
+
+                for (int j = 0; j <= i; j++)
+                {
+                    delete realesrgan[j];
+                }
+
+                ncnn::destroy_gpu_instance();
+                return -1;
+            }
             realesrgan[i]->scale = scale;
             realesrgan[i]->tilesize = tilesize[i];
             realesrgan[i]->prepadding = prepadding;

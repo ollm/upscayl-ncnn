@@ -45,14 +45,35 @@ static const uint32_t realesrgan_postproc_tta_int8s_spv_data[] = {
 #include "realesrgan_postproc_tta_int8s.spv.hex.h"
 };
 
-RealESRGAN::RealESRGAN(int gpuid, bool _tta_mode)
+static void print_ncnn_load_error(const char *stage, int code)
+{
+    fprintf(stderr, "🚨 Error: ncnn %s failed with code %d\n", stage, code);
+    if (code < 0)
+    {
+        fprintf(stderr, "   Reason: model param/bin may be invalid, mismatched, or include unsupported layers for this ncnn build.\n");
+    }
+}
+
+RealESRGAN::RealESRGAN(int gpuid, bool _tta_mode, bool _fp32_mode)
 {
     net.opt.use_vulkan_compute = true;
-    net.opt.use_fp16_packed = true;
-    net.opt.use_fp16_storage = true;
-    net.opt.use_fp16_arithmetic = false;
-    net.opt.use_int8_storage = true;
-    net.opt.use_int8_arithmetic = false;
+    fp32_mode = _fp32_mode;
+    if (fp32_mode)
+    {
+        net.opt.use_fp16_packed = false;
+        net.opt.use_fp16_storage = false;
+        net.opt.use_fp16_arithmetic = false;
+        net.opt.use_int8_storage = false;
+        net.opt.use_int8_arithmetic = false;
+    }
+    else
+    {
+        net.opt.use_fp16_packed = true;
+        net.opt.use_fp16_storage = true;
+        net.opt.use_fp16_arithmetic = false;
+        net.opt.use_int8_storage = true;
+        net.opt.use_int8_arithmetic = false;
+    }
 
     // Workaround for AMD RDNA2 (bug driver Vulkan) https://github.com/Tencent/ncnn/issues/6501#issuecomment-3731438810
     // net.opt.use_cooperative_matrix = false; Fixed in https://github.com/Tencent/ncnn/pull/6504
@@ -75,14 +96,23 @@ RealESRGAN::~RealESRGAN()
         delete realesrgan_postproc;
     }
 
-    bicubic_2x->destroy_pipeline(net.opt);
-    delete bicubic_2x;
+    if (bicubic_2x)
+    {
+        bicubic_2x->destroy_pipeline(net.opt);
+        delete bicubic_2x;
+    }
 
-    bicubic_3x->destroy_pipeline(net.opt);
-    delete bicubic_3x;
+    if (bicubic_3x)
+    {
+        bicubic_3x->destroy_pipeline(net.opt);
+        delete bicubic_3x;
+    }
 
-    bicubic_4x->destroy_pipeline(net.opt);
-    delete bicubic_4x;
+    if (bicubic_4x)
+    {
+        bicubic_4x->destroy_pipeline(net.opt);
+        delete bicubic_4x;
+    }
 }
 
 #if _WIN32
@@ -97,26 +127,51 @@ int RealESRGAN::load(const std::string &parampath, const std::string &modelpath)
         if (!fp)
         {
             fwprintf(stderr, L"🚨 Error: Failed to open %ls\n", parampath.c_str());
+            return -1;
         }
 
-        net.load_param(fp);
+        int ret = net.load_param(fp);
 
         fclose(fp);
+
+        if (ret != 0)
+        {
+            print_ncnn_load_error("load_param", ret);
+            return ret;
+        }
     }
     {
         FILE *fp = _wfopen(modelpath.c_str(), L"rb");
         if (!fp)
         {
             fwprintf(stderr, L"🚨 Error: Failed to open %ls\n", modelpath.c_str());
+            return -1;
         }
 
-        net.load_model(fp);
+        int ret = net.load_model(fp);
 
         fclose(fp);
+
+        if (ret != 0)
+        {
+            print_ncnn_load_error("load_model", ret);
+            return ret;
+        }
     }
 #else
-    net.load_param(parampath.c_str());
-    net.load_model(modelpath.c_str());
+    int retp = net.load_param(parampath.c_str());
+    if (retp != 0)
+    {
+        print_ncnn_load_error("load_param", retp);
+        return retp;
+    }
+
+    int retm = net.load_model(modelpath.c_str());
+    if (retm != 0)
+    {
+        print_ncnn_load_error("load_model", retm);
+        return retm;
+    }
 #endif
 
 #if NCNN_STRING
@@ -170,34 +225,118 @@ int RealESRGAN::load(const std::string &parampath, const std::string &modelpath)
         if (tta_mode)
         {
             if (net.opt.use_fp16_storage && net.opt.use_int8_storage)
-                realesrgan_preproc->create(realesrgan_preproc_tta_int8s_spv_data, sizeof(realesrgan_preproc_tta_int8s_spv_data), specializations);
+            {
+                int ret = realesrgan_preproc->create(realesrgan_preproc_tta_int8s_spv_data, sizeof(realesrgan_preproc_tta_int8s_spv_data), specializations);
+                if (ret != 0)
+                {
+                    fprintf(stderr, "🚨 Error: Failed to create preproc pipeline (tta/int8s), code=%d\n", ret);
+                    return ret;
+                }
+            }
             else if (net.opt.use_fp16_storage)
-                realesrgan_preproc->create(realesrgan_preproc_tta_fp16s_spv_data, sizeof(realesrgan_preproc_tta_fp16s_spv_data), specializations);
+            {
+                int ret = realesrgan_preproc->create(realesrgan_preproc_tta_fp16s_spv_data, sizeof(realesrgan_preproc_tta_fp16s_spv_data), specializations);
+                if (ret != 0)
+                {
+                    fprintf(stderr, "🚨 Error: Failed to create preproc pipeline (tta/fp16s), code=%d\n", ret);
+                    return ret;
+                }
+            }
             else
-                realesrgan_preproc->create(realesrgan_preproc_tta_spv_data, sizeof(realesrgan_preproc_tta_spv_data), specializations);
+            {
+                int ret = realesrgan_preproc->create(realesrgan_preproc_tta_spv_data, sizeof(realesrgan_preproc_tta_spv_data), specializations);
+                if (ret != 0)
+                {
+                    fprintf(stderr, "🚨 Error: Failed to create preproc pipeline (tta), code=%d\n", ret);
+                    return ret;
+                }
+            }
 
             if (net.opt.use_fp16_storage && net.opt.use_int8_storage)
-                realesrgan_postproc->create(realesrgan_postproc_tta_int8s_spv_data, sizeof(realesrgan_postproc_tta_int8s_spv_data), specializations);
+            {
+                int ret = realesrgan_postproc->create(realesrgan_postproc_tta_int8s_spv_data, sizeof(realesrgan_postproc_tta_int8s_spv_data), specializations);
+                if (ret != 0)
+                {
+                    fprintf(stderr, "🚨 Error: Failed to create postproc pipeline (tta/int8s), code=%d\n", ret);
+                    return ret;
+                }
+            }
             else if (net.opt.use_fp16_storage)
-                realesrgan_postproc->create(realesrgan_postproc_tta_fp16s_spv_data, sizeof(realesrgan_postproc_tta_fp16s_spv_data), specializations);
+            {
+                int ret = realesrgan_postproc->create(realesrgan_postproc_tta_fp16s_spv_data, sizeof(realesrgan_postproc_tta_fp16s_spv_data), specializations);
+                if (ret != 0)
+                {
+                    fprintf(stderr, "🚨 Error: Failed to create postproc pipeline (tta/fp16s), code=%d\n", ret);
+                    return ret;
+                }
+            }
             else
-                realesrgan_postproc->create(realesrgan_postproc_tta_spv_data, sizeof(realesrgan_postproc_tta_spv_data), specializations);
+            {
+                int ret = realesrgan_postproc->create(realesrgan_postproc_tta_spv_data, sizeof(realesrgan_postproc_tta_spv_data), specializations);
+                if (ret != 0)
+                {
+                    fprintf(stderr, "🚨 Error: Failed to create postproc pipeline (tta), code=%d\n", ret);
+                    return ret;
+                }
+            }
         }
         else
         {
             if (net.opt.use_fp16_storage && net.opt.use_int8_storage)
-                realesrgan_preproc->create(realesrgan_preproc_int8s_spv_data, sizeof(realesrgan_preproc_int8s_spv_data), specializations);
+            {
+                int ret = realesrgan_preproc->create(realesrgan_preproc_int8s_spv_data, sizeof(realesrgan_preproc_int8s_spv_data), specializations);
+                if (ret != 0)
+                {
+                    fprintf(stderr, "🚨 Error: Failed to create preproc pipeline (int8s), code=%d\n", ret);
+                    return ret;
+                }
+            }
             else if (net.opt.use_fp16_storage)
-                realesrgan_preproc->create(realesrgan_preproc_fp16s_spv_data, sizeof(realesrgan_preproc_fp16s_spv_data), specializations);
+            {
+                int ret = realesrgan_preproc->create(realesrgan_preproc_fp16s_spv_data, sizeof(realesrgan_preproc_fp16s_spv_data), specializations);
+                if (ret != 0)
+                {
+                    fprintf(stderr, "🚨 Error: Failed to create preproc pipeline (fp16s), code=%d\n", ret);
+                    return ret;
+                }
+            }
             else
-                realesrgan_preproc->create(realesrgan_preproc_spv_data, sizeof(realesrgan_preproc_spv_data), specializations);
+            {
+                int ret = realesrgan_preproc->create(realesrgan_preproc_spv_data, sizeof(realesrgan_preproc_spv_data), specializations);
+                if (ret != 0)
+                {
+                    fprintf(stderr, "🚨 Error: Failed to create preproc pipeline, code=%d\n", ret);
+                    return ret;
+                }
+            }
 
             if (net.opt.use_fp16_storage && net.opt.use_int8_storage)
-                realesrgan_postproc->create(realesrgan_postproc_int8s_spv_data, sizeof(realesrgan_postproc_int8s_spv_data), specializations);
+            {
+                int ret = realesrgan_postproc->create(realesrgan_postproc_int8s_spv_data, sizeof(realesrgan_postproc_int8s_spv_data), specializations);
+                if (ret != 0)
+                {
+                    fprintf(stderr, "🚨 Error: Failed to create postproc pipeline (int8s), code=%d\n", ret);
+                    return ret;
+                }
+            }
             else if (net.opt.use_fp16_storage)
-                realesrgan_postproc->create(realesrgan_postproc_fp16s_spv_data, sizeof(realesrgan_postproc_fp16s_spv_data), specializations);
+            {
+                int ret = realesrgan_postproc->create(realesrgan_postproc_fp16s_spv_data, sizeof(realesrgan_postproc_fp16s_spv_data), specializations);
+                if (ret != 0)
+                {
+                    fprintf(stderr, "🚨 Error: Failed to create postproc pipeline (fp16s), code=%d\n", ret);
+                    return ret;
+                }
+            }
             else
-                realesrgan_postproc->create(realesrgan_postproc_spv_data, sizeof(realesrgan_postproc_spv_data), specializations);
+            {
+                int ret = realesrgan_postproc->create(realesrgan_postproc_spv_data, sizeof(realesrgan_postproc_spv_data), specializations);
+                if (ret != 0)
+                {
+                    fprintf(stderr, "🚨 Error: Failed to create postproc pipeline, code=%d\n", ret);
+                    return ret;
+                }
+            }
         }
     }
 
@@ -259,6 +398,14 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
     opt.blob_vkallocator = blob_vkallocator;
     opt.workspace_vkallocator = blob_vkallocator;
     opt.staging_vkallocator = staging_vkallocator;
+
+    if (channels != 3 && channels != 4)
+    {
+        fprintf(stderr, "🚨 Error: Unsupported channel count %d (expected 3 or 4)\n", channels);
+        net.vulkan_device()->reclaim_blob_allocator(blob_vkallocator);
+        net.vulkan_device()->reclaim_staging_allocator(staging_vkallocator);
+        return -1;
+    }
 
     // each tile 100x100
     const int xtiles = (w + TILE_SIZE_X - 1) / TILE_SIZE_X;
@@ -401,9 +548,24 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                     ex.set_workspace_vkallocator(blob_vkallocator);
                     ex.set_staging_vkallocator(staging_vkallocator);
 
-                    ex.input(input_blob_name.c_str(), in_tile_gpu[ti]);
+                    int ret = ex.input(input_blob_name.c_str(), in_tile_gpu[ti]);
+                    if (ret != 0)
+                    {
+                        fprintf(stderr, "🚨 Error: ex.input failed (blob=%s, code=%d)\n", input_blob_name.c_str(), ret);
+                        net.vulkan_device()->reclaim_blob_allocator(blob_vkallocator);
+                        net.vulkan_device()->reclaim_staging_allocator(staging_vkallocator);
+                        return ret;
+                    }
 
-                    ex.extract(output_blob_name.c_str(), out_tile_gpu[ti], cmd);
+                    ret = ex.extract(output_blob_name.c_str(), out_tile_gpu[ti], cmd);
+                    if (ret != 0)
+                    {
+                        fprintf(stderr, "🚨 Error: ex.extract failed (blob=%s, code=%d)\n", output_blob_name.c_str(), ret);
+                        fprintf(stderr, "   Reason: model may be incompatible with current runtime settings/backends.\n");
+                        net.vulkan_device()->reclaim_blob_allocator(blob_vkallocator);
+                        net.vulkan_device()->reclaim_staging_allocator(staging_vkallocator);
+                        return ret;
+                    }
 
                     {
                         cmd.submit_and_wait();
@@ -525,9 +687,24 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                     ex.set_workspace_vkallocator(blob_vkallocator);
                     ex.set_staging_vkallocator(staging_vkallocator);
 
-                    ex.input(input_blob_name.c_str(), in_tile_gpu);
+                    int ret = ex.input(input_blob_name.c_str(), in_tile_gpu);
+                    if (ret != 0)
+                    {
+                        fprintf(stderr, "🚨 Error: ex.input failed (blob=%s, code=%d)\n", input_blob_name.c_str(), ret);
+                        net.vulkan_device()->reclaim_blob_allocator(blob_vkallocator);
+                        net.vulkan_device()->reclaim_staging_allocator(staging_vkallocator);
+                        return ret;
+                    }
 
-                    ex.extract(output_blob_name.c_str(), out_tile_gpu, cmd);
+                    ret = ex.extract(output_blob_name.c_str(), out_tile_gpu, cmd);
+                    if (ret != 0)
+                    {
+                        fprintf(stderr, "🚨 Error: ex.extract failed (blob=%s, code=%d)\n", output_blob_name.c_str(), ret);
+                        fprintf(stderr, "   Reason: model may be incompatible with current runtime settings/backends.\n");
+                        net.vulkan_device()->reclaim_blob_allocator(blob_vkallocator);
+                        net.vulkan_device()->reclaim_staging_allocator(staging_vkallocator);
+                        return ret;
+                    }
                 }
 
                 ncnn::VkMat out_alpha_tile_gpu;
