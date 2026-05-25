@@ -54,6 +54,167 @@ static void print_ncnn_load_error(const char *stage, int code)
     }
 }
 
+static void print_mat_shape(const ncnn::Mat &m)
+{
+    fprintf(stderr,
+            "dims=%d w=%d h=%d d=%d c=%d elempack=%d elemsize=%zu",
+            m.dims, m.w, m.h, m.d, m.c, m.elempack, m.elemsize);
+}
+
+static void print_layer_io_details(
+    const ncnn::Layer *layer,
+    const std::vector<ncnn::Blob> &blobs)
+{
+    fprintf(stderr, "🔬   bottoms=%zu\n", layer->bottoms.size());
+    for (size_t i = 0; i < layer->bottoms.size(); i++)
+    {
+        const int bidx = layer->bottoms[i];
+        if (bidx < 0 || bidx >= (int)blobs.size())
+        {
+            fprintf(stderr, "🔬     - [%zu] blob_idx=%d (out-of-range)\n", i, bidx);
+            continue;
+        }
+
+        const ncnn::Blob &b = blobs[bidx];
+        const ncnn::Mat shape_hint = i < layer->bottom_shapes.size() ? layer->bottom_shapes[i] : b.shape;
+
+#if NCNN_STRING
+        fprintf(stderr, "🔬     - [%zu] blob_idx=%d name='%s' shape=", i, bidx, b.name.c_str());
+#else
+        fprintf(stderr, "🔬     - [%zu] blob_idx=%d shape=", i, bidx);
+#endif
+        print_mat_shape(shape_hint);
+        fprintf(stderr, "\n");
+    }
+
+    fprintf(stderr, "🔬   tops=%zu\n", layer->tops.size());
+    for (size_t i = 0; i < layer->tops.size(); i++)
+    {
+        const int tidx = layer->tops[i];
+        if (tidx < 0 || tidx >= (int)blobs.size())
+        {
+            fprintf(stderr, "🔬     - [%zu] blob_idx=%d (out-of-range)\n", i, tidx);
+            continue;
+        }
+
+        const ncnn::Blob &t = blobs[tidx];
+        const ncnn::Mat shape_hint = i < layer->top_shapes.size() ? layer->top_shapes[i] : t.shape;
+
+#if NCNN_STRING
+        fprintf(stderr, "🔬     - [%zu] blob_idx=%d name='%s' shape=", i, tidx, t.name.c_str());
+#else
+        fprintf(stderr, "🔬     - [%zu] blob_idx=%d shape=", i, tidx);
+#endif
+        print_mat_shape(shape_hint);
+        fprintf(stderr, "\n");
+    }
+}
+
+static void print_runtime_probe_failure(
+    const ncnn::Net &net,
+    const std::string &input_blob_name,
+    const ncnn::VkMat &input_tile,
+    ncnn::VkAllocator *blob_vkallocator,
+    ncnn::VkAllocator *staging_vkallocator)
+{
+    const std::vector<ncnn::Blob> &blobs = net.blobs();
+    const std::vector<ncnn::Layer *> &layers = net.layers();
+
+    int last_ok_blob = -1;
+    int fail_blob = -1;
+    int fail_ret = 0;
+
+    ncnn::VkCompute probe_cmd(net.vulkan_device());
+
+    for (int bi = 0; bi < (int)blobs.size(); bi++)
+    {
+        ncnn::Extractor probe_ex = net.create_extractor();
+        probe_ex.set_blob_vkallocator(blob_vkallocator);
+        probe_ex.set_workspace_vkallocator(blob_vkallocator);
+        probe_ex.set_staging_vkallocator(staging_vkallocator);
+
+        int ret = probe_ex.input(input_blob_name.c_str(), input_tile);
+        if (ret != 0)
+        {
+            fprintf(stderr, "🔬 Runtime probe aborted: input failed (code=%d)\n", ret);
+            return;
+        }
+
+        ncnn::VkMat tmp;
+        ret = probe_ex.extract(bi, tmp, probe_cmd);
+        if (ret == 0)
+        {
+            ret = probe_cmd.submit_and_wait();
+            probe_cmd.reset();
+        }
+
+        if (ret != 0)
+        {
+            fail_blob = bi;
+            fail_ret = ret;
+            break;
+        }
+
+        last_ok_blob = bi;
+    }
+
+    if (fail_blob < 0)
+    {
+        fprintf(stderr, "🔬 Runtime probe did not isolate a failing blob (all intermediate extracts succeeded)\n");
+        return;
+    }
+
+    const ncnn::Blob &fb = blobs[fail_blob];
+    const int producer = fb.producer;
+
+#if NCNN_STRING
+    fprintf(stderr, "🔬 Runtime probe first failing blob: idx=%d name='%s' ret=%d producer=%d\n",
+            fail_blob, fb.name.c_str(), fail_ret, producer);
+#else
+    fprintf(stderr, "🔬 Runtime probe first failing blob: idx=%d ret=%d producer=%d\n",
+            fail_blob, fail_ret, producer);
+#endif
+
+    if (producer >= 0 && producer < (int)layers.size())
+    {
+        const ncnn::Layer *pl = layers[producer];
+#if NCNN_STRING
+        fprintf(stderr, "🔬 Suspect producer layer/op: idx=%d name='%s' type='%s'\n",
+                producer, pl->name.c_str(), pl->type.c_str());
+#else
+        fprintf(stderr, "🔬 Suspect producer layer/op: idx=%d typeindex=%d\n",
+                producer, pl->typeindex);
+#endif
+        print_layer_io_details(pl, blobs);
+    }
+
+    if (last_ok_blob >= 0)
+    {
+        const ncnn::Blob &lb = blobs[last_ok_blob];
+        const int last_producer = lb.producer;
+#if NCNN_STRING
+        fprintf(stderr, "🔬 Last successful blob: idx=%d name='%s' producer=%d\n",
+                last_ok_blob, lb.name.c_str(), last_producer);
+#else
+        fprintf(stderr, "🔬 Last successful blob: idx=%d producer=%d\n",
+                last_ok_blob, last_producer);
+#endif
+
+        if (last_producer >= 0 && last_producer < (int)layers.size())
+        {
+            const ncnn::Layer *lpl = layers[last_producer];
+#if NCNN_STRING
+            fprintf(stderr, "🔬 Last successful producer layer/op: idx=%d name='%s' type='%s'\n",
+                    last_producer, lpl->name.c_str(), lpl->type.c_str());
+#else
+            fprintf(stderr, "🔬 Last successful producer layer/op: idx=%d typeindex=%d\n",
+                    last_producer, lpl->typeindex);
+#endif
+            print_layer_io_details(lpl, blobs);
+        }
+    }
+}
+
 RealESRGAN::RealESRGAN(int gpuid, bool _tta_mode, bool _fp32_mode)
 {
     net.opt.use_vulkan_compute = true;
@@ -561,6 +722,7 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                     if (ret != 0)
                     {
                         fprintf(stderr, "🚨 Error: ex.extract failed (blob=%s, code=%d)\n", output_blob_name.c_str(), ret);
+                        print_runtime_probe_failure(net, input_blob_name, in_tile_gpu[ti], blob_vkallocator, staging_vkallocator);
                         fprintf(stderr, "   Reason: model may be incompatible with current runtime settings/backends.\n");
                         net.vulkan_device()->reclaim_blob_allocator(blob_vkallocator);
                         net.vulkan_device()->reclaim_staging_allocator(staging_vkallocator);
@@ -700,6 +862,7 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                     if (ret != 0)
                     {
                         fprintf(stderr, "🚨 Error: ex.extract failed (blob=%s, code=%d)\n", output_blob_name.c_str(), ret);
+                        print_runtime_probe_failure(net, input_blob_name, in_tile_gpu, blob_vkallocator, staging_vkallocator);
                         fprintf(stderr, "   Reason: model may be incompatible with current runtime settings/backends.\n");
                         net.vulkan_device()->reclaim_blob_allocator(blob_vkallocator);
                         net.vulkan_device()->reclaim_staging_allocator(staging_vkallocator);
