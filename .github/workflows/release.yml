@@ -222,7 +222,7 @@ jobs:
   # ---------------- Windows ----------------
   windows:
     needs: setup
-    runs-on: windows-latest
+    runs-on: windows-2025-vs2026
     env:
       PACKAGENAME: ${{ needs.setup.outputs.APPNAME }}-${{ needs.setup.outputs.VERSION }}-windows
     steps:
