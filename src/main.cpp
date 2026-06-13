@@ -8,9 +8,6 @@
 #include <filesystem>
 #include <string>
 #include <cmath>
-#include <thread>
-#include <atomic>
-#include <chrono>
 #if _WIN32
 #include <locale>
 #include <codecvt>
@@ -258,7 +255,6 @@ static void print_usage()
     fprintf(stderr, "  -u model-mem-safe-pct percentage of heap budget usable for auto tile estimation (default=50)\n");
     fprintf(stderr, "  -k max-tilesize      maximum auto tile size cap (default=1024)\n");
     fprintf(stderr, "  --max-tilesize N     maximum auto tile size cap (default=1024)\n");
-    fprintf(stderr, "  --monitor-memory     enable gpu memory monitoring logs (default=off)\n");
     fprintf(stderr, "  --diagnose-model     validate model compatibility only (no image processing)\n");
     fprintf(stderr, "  -f format            output image format (jpg/png/webp, default=ext/png)\n");
     fprintf(stderr, "  -v                   verbose output\n");
@@ -839,7 +835,6 @@ struct ProcessParams
     int verbose;
     int tta_mode;
     int fp32_mode;
-    bool monitor_memory;
     path_t format;
 };
 
@@ -850,7 +845,7 @@ static ProcessParams create_process_params(
     const std::vector<int> &tilesize, const path_t &model,
     const path_t &modelname, const std::vector<int> &gpuid,
     int jobs_load, const std::vector<int> &jobs_proc, int jobs_save,
-    int verbose, int tta_mode, int fp32_mode, bool monitor_memory, const path_t &format)
+    int verbose, int tta_mode, int fp32_mode, const path_t &format)
 {
     ProcessParams params;
     params.scale = scale;
@@ -872,7 +867,6 @@ static ProcessParams create_process_params(
     params.verbose = verbose;
     params.tta_mode = tta_mode;
     params.fp32_mode = fp32_mode;
-    params.monitor_memory = monitor_memory;
     params.format = format;
     return params;
 }
@@ -884,65 +878,6 @@ static int process_image_batch(
     std::vector<RealESRGAN *> &realesrgan,
     int prepadding)
 {
-    std::vector<uint32_t> heap_usage_before;
-    std::vector<uint32_t> heap_usage_peak;
-    std::vector<uint32_t> heap_budget_before;
-    std::vector<uint32_t> heap_budget_min;
-    if (params.monitor_memory)
-    {
-        heap_usage_before.reserve(params.gpuid.size());
-        heap_usage_peak.reserve(params.gpuid.size());
-        heap_budget_before.reserve(params.gpuid.size());
-        heap_budget_min.reserve(params.gpuid.size());
-        for (int i = 0; i < (int)params.gpuid.size(); i++)
-        {
-            uint32_t usage_mb = ncnn::get_gpu_device(params.gpuid[i])->get_heap_usage();
-            uint32_t budget_mb = ncnn::get_gpu_device(params.gpuid[i])->get_heap_budget();
-
-            heap_usage_before.push_back(usage_mb);
-            heap_usage_peak.push_back(usage_mb);
-            heap_budget_before.push_back(budget_mb);
-            heap_budget_min.push_back(budget_mb);
-
-            if (usage_mb > 0)
-            {
-                fprintf(stderr, "🧠 GPU %d heap usage before processing: %u MB (budget: %u MB)\n", params.gpuid[i], usage_mb, budget_mb);
-            }
-            else
-            {
-                fprintf(stderr, "🧠 GPU %d heap budget before processing: %u MB (heap usage unavailable on this driver/runtime)\n", params.gpuid[i], budget_mb);
-            }
-        }
-    }
-
-    std::atomic<bool> monitor_running(false);
-    std::thread heap_monitor;
-    if (params.monitor_memory)
-    {
-        monitor_running.store(true);
-        heap_monitor = std::thread([&]() {
-            while (monitor_running.load())
-            {
-                for (int i = 0; i < (int)params.gpuid.size(); i++)
-                {
-                    uint32_t usage_mb = ncnn::get_gpu_device(params.gpuid[i])->get_heap_usage();
-                    uint32_t budget_mb = ncnn::get_gpu_device(params.gpuid[i])->get_heap_budget();
-
-                    if (usage_mb > heap_usage_peak[i])
-                    {
-                        heap_usage_peak[i] = usage_mb;
-                    }
-                    if (budget_mb < heap_budget_min[i])
-                    {
-                        heap_budget_min[i] = budget_mb;
-                    }
-                }
-
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            }
-        });
-    }
-
     // collect input and output filepath
     std::vector<path_t> input_files;
     std::vector<path_t> output_files;
@@ -1088,43 +1023,6 @@ static int process_image_batch(
         {
             save_threads[i]->join();
             delete save_threads[i];
-        }
-    }
-
-    if (params.monitor_memory)
-    {
-        monitor_running.store(false);
-        heap_monitor.join();
-    }
-
-    if (params.monitor_memory)
-    {
-        for (int i = 0; i < (int)params.gpuid.size(); i++)
-        {
-            uint32_t usage_after_mb = ncnn::get_gpu_device(params.gpuid[i])->get_heap_usage();
-            uint32_t budget_after_mb = ncnn::get_gpu_device(params.gpuid[i])->get_heap_budget();
-
-            uint32_t usage_before_mb = heap_usage_before[i];
-            uint32_t usage_peak_mb = heap_usage_peak[i];
-            uint32_t budget_before_mb = heap_budget_before[i];
-            uint32_t budget_min_mb = heap_budget_min[i];
-
-            uint32_t estimated_used_end_mb = 0;
-            uint32_t estimated_peak_used_mb = 0;
-
-            if (usage_before_mb > 0)
-            {
-                estimated_used_end_mb = usage_after_mb > usage_before_mb ? (usage_after_mb - usage_before_mb) : 0;
-                estimated_peak_used_mb = usage_peak_mb > usage_before_mb ? (usage_peak_mb - usage_before_mb) : 0;
-                fprintf(stderr, "🧠 GPU %d heap usage after processing: %u MB (estimated used end: %u MB, estimated peak used: %u MB, budget: %u MB)\n",
-                        params.gpuid[i], usage_after_mb, estimated_used_end_mb, estimated_peak_used_mb, budget_after_mb);
-                continue;
-            }
-
-                estimated_used_end_mb = budget_before_mb > budget_after_mb ? (budget_before_mb - budget_after_mb) : 0;
-                estimated_peak_used_mb = budget_before_mb > budget_min_mb ? (budget_before_mb - budget_min_mb) : 0;
-            fprintf(stderr, "🧠 GPU %d heap budget after processing: %u MB (estimated used end: %u MB, estimated peak used: %u MB, heap usage unavailable on this driver/runtime)\n",
-                    params.gpuid[i], budget_after_mb, estimated_used_end_mb, estimated_peak_used_mb);
         }
     }
 
@@ -1555,7 +1453,6 @@ int main(int argc, char **argv)
     float model_mem_128_mb = 0.f;
     float model_mem_safe_pct = 50.f;
     int max_tile_size = 1024;
-    bool monitor_memory = false;
     bool diagnose_model = false;
     path_t format = PATHSTR("png");
     bool daemon_mode = false;
@@ -1569,11 +1466,6 @@ int main(int argc, char **argv)
             if (wcscmp(argv[i], L"--diagnose-model") == 0)
             {
                 diagnose_model = true;
-                continue;
-            }
-            if (wcscmp(argv[i], L"--monitor-memory") == 0)
-            {
-                monitor_memory = true;
                 continue;
             }
             if (wcscmp(argv[i], L"--max-tilesize") == 0)
@@ -1607,11 +1499,6 @@ int main(int argc, char **argv)
             if (strcmp(argv[i], "--diagnose-model") == 0)
             {
                 diagnose_model = true;
-                continue;
-            }
-            if (strcmp(argv[i], "--monitor-memory") == 0)
-            {
-                monitor_memory = true;
                 continue;
             }
             if (strcmp(argv[i], "--max-tilesize") == 0)
@@ -2271,7 +2158,7 @@ int main(int argc, char **argv)
             outputScale, hasOutputScale, compression,
             resizeProvided, hasCustomWidth, tilesize, model,
             modelname, gpuid, jobs_load, jobs_proc, jobs_save,
-            verbose, tta_mode, fp32_mode, monitor_memory, format);
+            verbose, tta_mode, fp32_mode, format);
 
         int result = run_daemon_mode(params);
         
@@ -2287,7 +2174,7 @@ int main(int argc, char **argv)
             outputScale, hasOutputScale, compression,
             resizeProvided, hasCustomWidth, tilesize, model,
             modelname, gpuid, jobs_load, jobs_proc, jobs_save,
-            verbose, tta_mode, fp32_mode, monitor_memory, format);
+            verbose, tta_mode, fp32_mode, format);
 
         std::vector<RealESRGAN *> realesrgan(use_gpu_count);
 
