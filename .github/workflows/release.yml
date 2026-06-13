@@ -239,7 +239,7 @@ jobs:
         run: |
           $env:VULKAN_SDK="C:\VulkanSDK"
           mkdir build; cd build
-          cmake -A x64 ../src -G "Visual Studio 17 2022"
+          cmake -A x64 ../src -G "Visual Studio 2026"
           cmake --build . --config Release
 
       - name: Package
