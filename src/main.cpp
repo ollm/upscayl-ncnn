@@ -7,6 +7,10 @@
 #include <clocale>
 #include <filesystem>
 #include <string>
+#include <cmath>
+#include <thread>
+#include <atomic>
+#include <chrono>
 #if _WIN32
 #include <locale>
 #include <codecvt>
@@ -43,6 +47,37 @@ static const char *resizemodes[] = {
     "mitchell",     // STBIR_FILTER_MITCHELL
     "pointsample"   // STBIR_FILTER_POINT_SAMPLE
 };
+
+static int floor_power_of_two(int v)
+{
+    if (v <= 1)
+        return 1;
+
+    int p = 1;
+    while ((p << 1) > 0 && (p << 1) <= v)
+    {
+        p <<= 1;
+    }
+
+    return p;
+}
+
+static int estimate_tilesize_from_model_mem128(uint32_t heap_budget_mb, float model_mem_128_mb, float safety_percent, int max_tile_size)
+{
+    if (model_mem_128_mb <= 0.f)
+        return 0;
+
+    // Reserve only a percentage of reported budget as a safety margin.
+    const double safe_budget_mb = (double)heap_budget_mb * ((double)safety_percent / 100.0);
+    const double ratio = safe_budget_mb / (double)model_mem_128_mb;
+    const double raw_tile = 128.0 * std::sqrt(std::max(0.0, ratio));
+
+    int tile = floor_power_of_two((int)raw_tile);
+    tile = std::max(tile, 32);
+    tile = std::min(tile, max_tile_size);
+
+    return tile;
+}
 
 #if _WIN32
 #include <wchar.h>
@@ -219,6 +254,11 @@ static void print_usage()
     fprintf(stderr, "  -j load:proc:save    thread count for load/proc/save (default=1:2:2) can be 1:2,2,2:2 for multi-gpu\n");
     fprintf(stderr, "  -x                   enable tta mode\n");
     fprintf(stderr, "  -p                   force fp32 path (disable fp16/int8 storage)\n");
+    fprintf(stderr, "  -y model-mem128-mb   model memory usage in MB measured at tile=128 for auto tile estimation\n");
+    fprintf(stderr, "  -u model-mem-safe-pct percentage of heap budget usable for auto tile estimation (default=50)\n");
+    fprintf(stderr, "  -k max-tilesize      maximum auto tile size cap (default=1024)\n");
+    fprintf(stderr, "  --max-tilesize N     maximum auto tile size cap (default=1024)\n");
+    fprintf(stderr, "  --monitor-memory     enable gpu memory monitoring logs (default=off)\n");
     fprintf(stderr, "  --diagnose-model     validate model compatibility only (no image processing)\n");
     fprintf(stderr, "  -f format            output image format (jpg/png/webp, default=ext/png)\n");
     fprintf(stderr, "  -v                   verbose output\n");
@@ -799,6 +839,7 @@ struct ProcessParams
     int verbose;
     int tta_mode;
     int fp32_mode;
+    bool monitor_memory;
     path_t format;
 };
 
@@ -809,7 +850,7 @@ static ProcessParams create_process_params(
     const std::vector<int> &tilesize, const path_t &model,
     const path_t &modelname, const std::vector<int> &gpuid,
     int jobs_load, const std::vector<int> &jobs_proc, int jobs_save,
-    int verbose, int tta_mode, int fp32_mode, const path_t &format)
+    int verbose, int tta_mode, int fp32_mode, bool monitor_memory, const path_t &format)
 {
     ProcessParams params;
     params.scale = scale;
@@ -831,6 +872,7 @@ static ProcessParams create_process_params(
     params.verbose = verbose;
     params.tta_mode = tta_mode;
     params.fp32_mode = fp32_mode;
+    params.monitor_memory = monitor_memory;
     params.format = format;
     return params;
 }
@@ -842,6 +884,65 @@ static int process_image_batch(
     std::vector<RealESRGAN *> &realesrgan,
     int prepadding)
 {
+    std::vector<uint32_t> heap_usage_before;
+    std::vector<uint32_t> heap_usage_peak;
+    std::vector<uint32_t> heap_budget_before;
+    std::vector<uint32_t> heap_budget_min;
+    if (params.monitor_memory)
+    {
+        heap_usage_before.reserve(params.gpuid.size());
+        heap_usage_peak.reserve(params.gpuid.size());
+        heap_budget_before.reserve(params.gpuid.size());
+        heap_budget_min.reserve(params.gpuid.size());
+        for (int i = 0; i < (int)params.gpuid.size(); i++)
+        {
+            uint32_t usage_mb = ncnn::get_gpu_device(params.gpuid[i])->get_heap_usage();
+            uint32_t budget_mb = ncnn::get_gpu_device(params.gpuid[i])->get_heap_budget();
+
+            heap_usage_before.push_back(usage_mb);
+            heap_usage_peak.push_back(usage_mb);
+            heap_budget_before.push_back(budget_mb);
+            heap_budget_min.push_back(budget_mb);
+
+            if (usage_mb > 0)
+            {
+                fprintf(stderr, "🧠 GPU %d heap usage before processing: %u MB (budget: %u MB)\n", params.gpuid[i], usage_mb, budget_mb);
+            }
+            else
+            {
+                fprintf(stderr, "🧠 GPU %d heap budget before processing: %u MB (heap usage unavailable on this driver/runtime)\n", params.gpuid[i], budget_mb);
+            }
+        }
+    }
+
+    std::atomic<bool> monitor_running(false);
+    std::thread heap_monitor;
+    if (params.monitor_memory)
+    {
+        monitor_running.store(true);
+        heap_monitor = std::thread([&]() {
+            while (monitor_running.load())
+            {
+                for (int i = 0; i < (int)params.gpuid.size(); i++)
+                {
+                    uint32_t usage_mb = ncnn::get_gpu_device(params.gpuid[i])->get_heap_usage();
+                    uint32_t budget_mb = ncnn::get_gpu_device(params.gpuid[i])->get_heap_budget();
+
+                    if (usage_mb > heap_usage_peak[i])
+                    {
+                        heap_usage_peak[i] = usage_mb;
+                    }
+                    if (budget_mb < heap_budget_min[i])
+                    {
+                        heap_budget_min[i] = budget_mb;
+                    }
+                }
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+        });
+    }
+
     // collect input and output filepath
     std::vector<path_t> input_files;
     std::vector<path_t> output_files;
@@ -987,6 +1088,43 @@ static int process_image_batch(
         {
             save_threads[i]->join();
             delete save_threads[i];
+        }
+    }
+
+    if (params.monitor_memory)
+    {
+        monitor_running.store(false);
+        heap_monitor.join();
+    }
+
+    if (params.monitor_memory)
+    {
+        for (int i = 0; i < (int)params.gpuid.size(); i++)
+        {
+            uint32_t usage_after_mb = ncnn::get_gpu_device(params.gpuid[i])->get_heap_usage();
+            uint32_t budget_after_mb = ncnn::get_gpu_device(params.gpuid[i])->get_heap_budget();
+
+            uint32_t usage_before_mb = heap_usage_before[i];
+            uint32_t usage_peak_mb = heap_usage_peak[i];
+            uint32_t budget_before_mb = heap_budget_before[i];
+            uint32_t budget_min_mb = heap_budget_min[i];
+
+            uint32_t estimated_used_end_mb = 0;
+            uint32_t estimated_peak_used_mb = 0;
+
+            if (usage_before_mb > 0)
+            {
+                estimated_used_end_mb = usage_after_mb > usage_before_mb ? (usage_after_mb - usage_before_mb) : 0;
+                estimated_peak_used_mb = usage_peak_mb > usage_before_mb ? (usage_peak_mb - usage_before_mb) : 0;
+                fprintf(stderr, "🧠 GPU %d heap usage after processing: %u MB (estimated used end: %u MB, estimated peak used: %u MB, budget: %u MB)\n",
+                        params.gpuid[i], usage_after_mb, estimated_used_end_mb, estimated_peak_used_mb, budget_after_mb);
+                continue;
+            }
+
+                estimated_used_end_mb = budget_before_mb > budget_after_mb ? (budget_before_mb - budget_after_mb) : 0;
+                estimated_peak_used_mb = budget_before_mb > budget_min_mb ? (budget_before_mb - budget_min_mb) : 0;
+            fprintf(stderr, "🧠 GPU %d heap budget after processing: %u MB (estimated used end: %u MB, estimated peak used: %u MB, heap usage unavailable on this driver/runtime)\n",
+                    params.gpuid[i], budget_after_mb, estimated_used_end_mb, estimated_peak_used_mb);
         }
     }
 
@@ -1414,6 +1552,10 @@ int main(int argc, char **argv)
     int verbose = 0;
     int tta_mode = 0;
     int fp32_mode = 0;
+    float model_mem_128_mb = 0.f;
+    float model_mem_safe_pct = 50.f;
+    int max_tile_size = 1024;
+    bool monitor_memory = false;
     bool diagnose_model = false;
     path_t format = PATHSTR("png");
     bool daemon_mode = false;
@@ -1427,6 +1569,27 @@ int main(int argc, char **argv)
             if (wcscmp(argv[i], L"--diagnose-model") == 0)
             {
                 diagnose_model = true;
+                continue;
+            }
+            if (wcscmp(argv[i], L"--monitor-memory") == 0)
+            {
+                monitor_memory = true;
+                continue;
+            }
+            if (wcscmp(argv[i], L"--max-tilesize") == 0)
+            {
+                if (i + 1 >= argc)
+                {
+                    fwprintf(stderr, L"🚨 Error: Missing value for --max-tilesize!\n");
+                    return -1;
+                }
+
+                max_tile_size = _wtoi(argv[++i]);
+                if (max_tile_size < 32)
+                {
+                    fwprintf(stderr, L"🚨 Error: Invalid max tile size, it should be >= 32!\n");
+                    return -1;
+                }
                 continue;
             }
 
@@ -1446,6 +1609,27 @@ int main(int argc, char **argv)
                 diagnose_model = true;
                 continue;
             }
+            if (strcmp(argv[i], "--monitor-memory") == 0)
+            {
+                monitor_memory = true;
+                continue;
+            }
+            if (strcmp(argv[i], "--max-tilesize") == 0)
+            {
+                if (i + 1 >= argc)
+                {
+                    fprintf(stderr, "🚨 Error: Missing value for --max-tilesize!\n");
+                    return -1;
+                }
+
+                max_tile_size = atoi(argv[++i]);
+                if (max_tile_size < 32)
+                {
+                    fprintf(stderr, "🚨 Error: Invalid max tile size, it should be >= 32!\n");
+                    return -1;
+                }
+                continue;
+            }
 
             argv[new_argc++] = argv[i];
         }
@@ -1458,7 +1642,7 @@ int main(int argc, char **argv)
     setlocale(LC_ALL, "");
     wchar_t opt;
     fprintf(stderr, "🚀 Starting Upscayl - Copyright © 2024\n");
-    while ((opt = getopt(argc, argv, L"i:o:z:s:r:w:t:c:m:n:g:j:f:vxphd")) != (wchar_t)-1)
+    while ((opt = getopt(argc, argv, L"i:o:z:s:r:w:t:c:m:n:g:j:f:y:u:k:vxphd")) != (wchar_t)-1)
     {
         switch (opt)
         {
@@ -1538,6 +1722,30 @@ int main(int argc, char **argv)
         case L'p':
             fp32_mode = 1;
             break;
+        case L'y':
+            model_mem_128_mb = _wtof(optarg);
+            if (model_mem_128_mb <= 0.f)
+            {
+                fwprintf(stderr, L"🚨 Error: Invalid model memory value for -y (must be > 0 MB)!\n");
+                return -1;
+            }
+            break;
+        case L'u':
+            model_mem_safe_pct = _wtof(optarg);
+            if (model_mem_safe_pct <= 0.f || model_mem_safe_pct > 100.f)
+            {
+                fwprintf(stderr, L"🚨 Error: Invalid safety percent for -u (must be > 0 and <= 100)!\n");
+                return -1;
+            }
+            break;
+        case L'k':
+            max_tile_size = _wtoi(optarg);
+            if (max_tile_size < 32)
+            {
+                fwprintf(stderr, L"🚨 Error: Invalid max tile size, it should be >= 32!\n");
+                return -1;
+            }
+            break;
         case L'd':
             daemon_mode = true;
             break;
@@ -1550,7 +1758,7 @@ int main(int argc, char **argv)
 #else  // _WIN32
     int opt;
     fprintf(stderr, "🚀 Starting Upscayl - Copyright © 2024\n");
-    while ((opt = getopt(argc, argv, "i:o:z:s:r:w:t:c:m:n:g:j:f:vxphd")) != -1)
+    while ((opt = getopt(argc, argv, "i:o:z:s:r:w:t:c:m:n:g:j:f:y:u:k:vxphd")) != -1)
     {
         switch (opt)
         {
@@ -1629,6 +1837,30 @@ int main(int argc, char **argv)
             break;
         case 'p':
             fp32_mode = 1;
+            break;
+        case 'y':
+            model_mem_128_mb = atof(optarg);
+            if (model_mem_128_mb <= 0.f)
+            {
+                fprintf(stderr, "🚨 Error: Invalid model memory value for -y (must be > 0 MB)!\n");
+                return -1;
+            }
+            break;
+        case 'u':
+            model_mem_safe_pct = atof(optarg);
+            if (model_mem_safe_pct <= 0.f || model_mem_safe_pct > 100.f)
+            {
+                fprintf(stderr, "🚨 Error: Invalid safety percent for -u (must be > 0 and <= 100)!\n");
+                return -1;
+            }
+            break;
+        case 'k':
+            max_tile_size = atoi(optarg);
+            if (max_tile_size < 32)
+            {
+                fprintf(stderr, "🚨 Error: Invalid max tile size, it should be >= 32!\n");
+                return -1;
+            }
             break;
         case 'd':
             daemon_mode = true;
@@ -1917,11 +2149,24 @@ int main(int argc, char **argv)
     for (int i = 0; i < use_gpu_count; i++)
     {
         if (tilesize[i] != 0)
+        {
+            fprintf(stderr, "🧩 GPU %d tile size fixed by user: %d\n", gpuid[i], tilesize[i]);
             continue;
+        }
 
         uint32_t heap_budget = ncnn::get_gpu_device(gpuid[i])->get_heap_budget();
 
-        // more fine-grained tilesize policy here
+        if (model_mem_128_mb > 0.f)
+        {
+            const int estimated_tile = estimate_tilesize_from_model_mem128(heap_budget, model_mem_128_mb, model_mem_safe_pct, max_tile_size);
+            tilesize[i] = estimated_tile;
+            const double safe_budget_mb = (double)heap_budget * ((double)model_mem_safe_pct / 100.0);
+            fprintf(stderr, "🧠 GPU %d heap budget=%u MB, safe budget(%.1f%%)=%.1f MB, model@tile128=%.2f MB, max-tile=%d -> auto tile=%d\n",
+                gpuid[i], heap_budget, model_mem_safe_pct, safe_budget_mb, model_mem_128_mb, max_tile_size, tilesize[i]);
+            continue;
+        }
+
+        // Legacy heuristic when -y is not provided.
         if (model.find(PATHSTR("models")) != path_t::npos)
         {
             if (heap_budget > 1900)
@@ -1932,6 +2177,8 @@ int main(int argc, char **argv)
                 tilesize[i] = 64;
             else
                 tilesize[i] = 32;
+
+            fprintf(stderr, "🧩 GPU %d auto tile (legacy heuristic) from heap budget %u MB: %d\n", gpuid[i], heap_budget, tilesize[i]);
         }
     }
 
@@ -2024,7 +2271,7 @@ int main(int argc, char **argv)
             outputScale, hasOutputScale, compression,
             resizeProvided, hasCustomWidth, tilesize, model,
             modelname, gpuid, jobs_load, jobs_proc, jobs_save,
-            verbose, tta_mode, fp32_mode, format);
+            verbose, tta_mode, fp32_mode, monitor_memory, format);
 
         int result = run_daemon_mode(params);
         
@@ -2040,7 +2287,7 @@ int main(int argc, char **argv)
             outputScale, hasOutputScale, compression,
             resizeProvided, hasCustomWidth, tilesize, model,
             modelname, gpuid, jobs_load, jobs_proc, jobs_save,
-            verbose, tta_mode, fp32_mode, format);
+            verbose, tta_mode, fp32_mode, monitor_memory, format);
 
         std::vector<RealESRGAN *> realesrgan(use_gpu_count);
 
