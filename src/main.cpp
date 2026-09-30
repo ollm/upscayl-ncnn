@@ -5,6 +5,8 @@
 #include <queue>
 #include <vector>
 #include <clocale>
+#include <climits>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 #include <cmath>
@@ -247,6 +249,7 @@ static void print_usage()
     fprintf(stderr, "  -t tile-size         tile size (>=32/0=auto, default=0) can be 0,0,0 for multi-gpu\n");
     fprintf(stderr, "  -m model-path        folder path to the pre-trained models. default=models\n");
     fprintf(stderr, "  -n model-name        model name (default=realesrgan-x4plus, can be realesr-animevideov3 | realesrgan-x4plus-anime | realesrnet-x4plus or any other model)\n");
+    fprintf(stderr, "  -P N, --prepadding N model prepadding in pixels (default=10, 0=disabled)\n");
     fprintf(stderr, "  -g gpu-id            gpu device to use (default=auto) can be 0,1,2 for multi-gpu\n");
     fprintf(stderr, "  -j load:proc:save    thread count for load/proc/save (default=1:2:2) can be 1:2,2,2:2 for multi-gpu\n");
     fprintf(stderr, "  -x                   enable tta mode\n");
@@ -290,6 +293,7 @@ static void print_daemon_help()
     fprintf(stderr, "  -w width             resize output to a width (default=W:default), use '-r help' for more details\n");
     fprintf(stderr, "  -c compress          compression of the output image, default 0 and varies to 100\n");
     fprintf(stderr, "  -t tile-size         tile size (>=32/0=auto, default=0) can be 0,0,0 for multi-gpu\n");
+    fprintf(stderr, "  -P N, --prepadding N model prepadding in pixels (default=10, 0=disabled; set when starting daemon)\n");
     fprintf(stderr, "  -j load:proc:save    thread count for load/proc/save (default=1:2:2) can be 1:2,2,2:2 for multi-gpu\n");
     fprintf(stderr, "  -x                   enable tta mode\n");
     fprintf(stderr, "  -p                   force fp32 path (disable fp16/int8 storage)\n");
@@ -835,6 +839,7 @@ struct ProcessParams
     int verbose;
     int tta_mode;
     int fp32_mode;
+    int prepadding;
     path_t format;
 };
 
@@ -845,7 +850,7 @@ static ProcessParams create_process_params(
     const std::vector<int> &tilesize, const path_t &model,
     const path_t &modelname, const std::vector<int> &gpuid,
     int jobs_load, const std::vector<int> &jobs_proc, int jobs_save,
-    int verbose, int tta_mode, int fp32_mode, const path_t &format)
+    int verbose, int tta_mode, int fp32_mode, int prepadding, const path_t &format)
 {
     ProcessParams params;
     params.scale = scale;
@@ -867,6 +872,7 @@ static ProcessParams create_process_params(
     params.verbose = verbose;
     params.tta_mode = tta_mode;
     params.fp32_mode = fp32_mode;
+    params.prepadding = prepadding;
     params.format = format;
     return params;
 }
@@ -1070,12 +1076,8 @@ static int run_daemon_mode(ProcessParams &params)
     originalParams = params;
 
     // Load model once and keep it in memory
-    int prepadding = 0;
-    if (params.model.find(PATHSTR("models")) != path_t::npos || params.model.find(PATHSTR("models2")) != path_t::npos)
-    {
-        prepadding = 10;
-    }
-    else
+    int prepadding = params.prepadding;
+    if (params.model.find(PATHSTR("models")) == path_t::npos && params.model.find(PATHSTR("models2")) == path_t::npos)
     {
         fprintf(stderr, "🚨 Error: Unknown model dir type. Make sure that the model directory is called 'models' with *.param and *.bin files inside it.\n");
         return -1;
@@ -1454,6 +1456,7 @@ int main(int argc, char **argv)
     float model_mem_safe_pct = 50.f;
     int max_tile_size = 1024;
     bool diagnose_model = false;
+    int prepadding = 10;
     path_t format = PATHSTR("png");
     bool daemon_mode = false;
 
@@ -1466,6 +1469,25 @@ int main(int argc, char **argv)
             if (wcscmp(argv[i], L"--diagnose-model") == 0)
             {
                 diagnose_model = true;
+                continue;
+            }
+            if (wcscmp(argv[i], L"--prepadding") == 0 || wcscmp(argv[i], L"-P") == 0)
+            {
+                if (i + 1 >= argc)
+                {
+                    fwprintf(stderr, L"🚨 Error: Missing value for --prepadding!\n");
+                    return -1;
+                }
+
+                wchar_t *endptr = nullptr;
+                const long value = wcstol(argv[++i], &endptr, 10);
+                if (endptr == argv[i] || *endptr != L'\0' || value < 0 || value > INT_MAX)
+                {
+                    fwprintf(stderr, L"🚨 Error: Invalid prepadding value; expected an integer >= 0.\n");
+                    return -1;
+                }
+
+                prepadding = static_cast<int>(value);
                 continue;
             }
             if (wcscmp(argv[i], L"--max-tilesize") == 0)
@@ -1499,6 +1521,25 @@ int main(int argc, char **argv)
             if (strcmp(argv[i], "--diagnose-model") == 0)
             {
                 diagnose_model = true;
+                continue;
+            }
+            if (strcmp(argv[i], "--prepadding") == 0 || strcmp(argv[i], "-P") == 0)
+            {
+                if (i + 1 >= argc)
+                {
+                    fprintf(stderr, "🚨 Error: Missing value for --prepadding!\n");
+                    return -1;
+                }
+
+                char *endptr = nullptr;
+                const long value = strtol(argv[++i], &endptr, 10);
+                if (endptr == argv[i] || *endptr != '\0' || value < 0 || value > INT_MAX)
+                {
+                    fprintf(stderr, "🚨 Error: Invalid prepadding value; expected an integer >= 0.\n");
+                    return -1;
+                }
+
+                prepadding = static_cast<int>(value);
                 continue;
             }
             if (strcmp(argv[i], "--max-tilesize") == 0)
@@ -1893,13 +1934,7 @@ int main(int argc, char **argv)
         }
     }
 
-    int prepadding = 0;
-
-    if (model.find(PATHSTR("models")) != path_t::npos || model.find(PATHSTR("models2")) != path_t::npos)
-    {
-        prepadding = 10;
-    }
-    else
+    if (model.find(PATHSTR("models")) == path_t::npos && model.find(PATHSTR("models2")) == path_t::npos)
     {
         fprintf(stderr, "🚨 Error: Unknown model dir type. Make sure that the model directory is called 'models' with *.param and *.bin files inside it.\n");
         return -1;
@@ -2158,7 +2193,7 @@ int main(int argc, char **argv)
             outputScale, hasOutputScale, compression,
             resizeProvided, hasCustomWidth, tilesize, model,
             modelname, gpuid, jobs_load, jobs_proc, jobs_save,
-            verbose, tta_mode, fp32_mode, format);
+            verbose, tta_mode, fp32_mode, prepadding, format);
 
         int result = run_daemon_mode(params);
         
@@ -2174,7 +2209,7 @@ int main(int argc, char **argv)
             outputScale, hasOutputScale, compression,
             resizeProvided, hasCustomWidth, tilesize, model,
             modelname, gpuid, jobs_load, jobs_proc, jobs_save,
-            verbose, tta_mode, fp32_mode, format);
+            verbose, tta_mode, fp32_mode, prepadding, format);
 
         std::vector<RealESRGAN *> realesrgan(use_gpu_count);
 

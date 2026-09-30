@@ -112,7 +112,7 @@ jobs:
   # ---------------- macOS x86_64 ----------------
   macos-x86:
     needs: setup
-    runs-on: macos-15
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
         with:
