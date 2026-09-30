@@ -577,10 +577,14 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
     // #pragma omp parallel for num_threads(2)
     for (int yi = 0; yi < ytiles; yi++)
     {
-        const int tile_h_nopad = std::min((yi + 1) * TILE_SIZE_Y, h) - yi * TILE_SIZE_Y;
+        const int tile_y_start = yi * TILE_SIZE_Y;
+        const int tile_y_end = std::min((yi + 1) * TILE_SIZE_Y, h);
+        const int tile_h_nopad = tile_y_end - tile_y_start;
+        const int pad_top = std::min(prepadding, tile_y_start);
+        const int pad_bottom = std::min(prepadding, h - tile_y_end);
 
-        int in_tile_y0 = std::max(yi * TILE_SIZE_Y - prepadding, 0);
-        int in_tile_y1 = std::min((yi + 1) * TILE_SIZE_Y + prepadding, h);
+        int in_tile_y0 = tile_y_start - pad_top;
+        int in_tile_y1 = tile_y_end + pad_bottom;
 
         ncnn::Mat in;
         if (opt.use_fp16_storage && opt.use_int8_storage)
@@ -636,7 +640,11 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
 
         for (int xi = 0; xi < xtiles; xi++)
         {
-            const int tile_w_nopad = std::min((xi + 1) * TILE_SIZE_X, w) - xi * TILE_SIZE_X;
+            const int tile_x_start = xi * TILE_SIZE_X;
+            const int tile_x_end = std::min((xi + 1) * TILE_SIZE_X, w);
+            const int tile_w_nopad = tile_x_end - tile_x_start;
+            const int pad_left = std::min(prepadding, tile_x_start);
+            const int pad_right = std::min(prepadding, w - tile_x_end);
 
             if (tta_mode)
             {
@@ -645,10 +653,10 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                 ncnn::VkMat in_alpha_tile_gpu;
                 {
                     // crop tile
-                    int tile_x0 = xi * TILE_SIZE_X - prepadding;
-                    int tile_x1 = std::min((xi + 1) * TILE_SIZE_X, w) + prepadding;
-                    int tile_y0 = yi * TILE_SIZE_Y - prepadding;
-                    int tile_y1 = std::min((yi + 1) * TILE_SIZE_Y, h) + prepadding;
+                    int tile_x0 = tile_x_start - pad_left;
+                    int tile_x1 = tile_x_end + pad_right;
+                    int tile_y0 = tile_y_start - pad_top;
+                    int tile_y1 = tile_y_end + pad_bottom;
 
                     in_tile_gpu[0].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, blob_vkallocator);
                     in_tile_gpu[1].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, blob_vkallocator);
@@ -683,10 +691,10 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                     constants[3].i = in_tile_gpu[0].w;
                     constants[4].i = in_tile_gpu[0].h;
                     constants[5].i = in_tile_gpu[0].cstep;
-                    constants[6].i = prepadding;
-                    constants[7].i = prepadding;
+                    constants[6].i = pad_top;
+                    constants[7].i = pad_left;
                     constants[8].i = xi * TILE_SIZE_X;
-                    constants[9].i = std::min(yi * TILE_SIZE_Y, prepadding);
+                    constants[9].i = pad_top;
                     constants[10].i = channels;
                     constants[11].i = in_alpha_tile_gpu.w;
                     constants[12].i = in_alpha_tile_gpu.h;
@@ -779,8 +787,8 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                     constants[5].i = out_gpu.cstep;
                     constants[6].i = xi * TILE_SIZE_X * scale;
                     constants[7].i = std::min(TILE_SIZE_X * scale, out_gpu.w - xi * TILE_SIZE_X * scale);
-                    constants[8].i = prepadding * scale;
-                    constants[9].i = prepadding * scale;
+                    constants[8].i = pad_left * scale;
+                    constants[9].i = pad_top * scale;
                     constants[10].i = channels;
                     constants[11].i = out_alpha_tile_gpu.w;
                     constants[12].i = out_alpha_tile_gpu.h;
@@ -800,10 +808,10 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                 ncnn::VkMat in_alpha_tile_gpu;
                 {
                     // crop tile
-                    int tile_x0 = xi * TILE_SIZE_X - prepadding;
-                    int tile_x1 = std::min((xi + 1) * TILE_SIZE_X, w) + prepadding;
-                    int tile_y0 = yi * TILE_SIZE_Y - prepadding;
-                    int tile_y1 = std::min((yi + 1) * TILE_SIZE_Y, h) + prepadding;
+                    int tile_x0 = tile_x_start - pad_left;
+                    int tile_x1 = tile_x_end + pad_right;
+                    int tile_y0 = tile_y_start - pad_top;
+                    int tile_y1 = tile_y_end + pad_bottom;
 
                     in_tile_gpu.create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, blob_vkallocator);
 
@@ -824,10 +832,10 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                     constants[3].i = in_tile_gpu.w;
                     constants[4].i = in_tile_gpu.h;
                     constants[5].i = in_tile_gpu.cstep;
-                    constants[6].i = prepadding;
-                    constants[7].i = prepadding;
+                    constants[6].i = pad_top;
+                    constants[7].i = pad_left;
                     constants[8].i = xi * TILE_SIZE_X;
-                    constants[9].i = std::min(yi * TILE_SIZE_Y, prepadding);
+                    constants[9].i = pad_top;
                     constants[10].i = channels;
                     constants[11].i = in_alpha_tile_gpu.w;
                     constants[12].i = in_alpha_tile_gpu.h;
@@ -907,8 +915,8 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                     constants[5].i = out_gpu.cstep;
                     constants[6].i = xi * TILE_SIZE_X * scale;
                     constants[7].i = std::min(TILE_SIZE_X * scale, out_gpu.w - xi * TILE_SIZE_X * scale);
-                    constants[8].i = prepadding * scale;
-                    constants[9].i = prepadding * scale;
+                    constants[8].i = pad_left * scale;
+                    constants[9].i = pad_top * scale;
                     constants[10].i = channels;
                     constants[11].i = out_alpha_tile_gpu.w;
                     constants[12].i = out_alpha_tile_gpu.h;
