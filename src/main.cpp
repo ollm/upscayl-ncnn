@@ -1160,21 +1160,13 @@ static int run_daemon_mode(ProcessParams &params)
     {
         fprintf(stderr, "📡 Ready> ");
 
-#if _WIN32
-        std::wstring wline;
-        if (!std::getline(std::wcin, wline))
-        {
-            break; // EOF or error
-        }
-
-        std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv1;
-        line = conv1.to_bytes(wline);
-#else
+        // Read daemon commands as UTF-8 bytes on every platform. On Windows,
+        // std::wcin may decode redirected stdin using the active locale/code page,
+        // corrupting non-ASCII paths before they can be converted to UTF-16.
         if (!std::getline(std::cin, line))
         {
             break; // EOF or error
         }
-#endif
 
         // Trim leading/trailing whitespace
         size_t start = line.find_first_not_of(" \t\r\n");
