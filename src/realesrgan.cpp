@@ -377,6 +377,29 @@ int RealESRGAN::load(const std::string &parampath, const std::string &modelpath)
         specializations[0].i = 0;
 #endif
 
+        // TODO: Add logs to debug errors with panels model
+        fprintf(stderr,
+            "\n[DEBUG] Vulkan pipeline configuration:\n"
+            "  use_vulkan_compute=%d\n"
+            "  use_fp16_storage=%d\n"
+            "  use_fp16_packed=%d\n"
+            "  use_fp16_arithmetic=%d\n"
+            "  use_int8_storage=%d\n"
+            "  use_int8_packed=%d\n"
+            "  use_int8_arithmetic=%d\n"
+            "  tta_mode=%d\n"
+            "  bgr=%d\n",
+            net.opt.use_vulkan_compute,
+            net.opt.use_fp16_storage,
+            net.opt.use_fp16_packed,
+            net.opt.use_fp16_arithmetic,
+            net.opt.use_int8_storage,
+            net.opt.use_int8_packed,
+            net.opt.use_int8_arithmetic,
+            tta_mode,
+            specializations[0].i
+        );
+
         realesrgan_preproc = new ncnn::Pipeline(net.vulkan_device());
         realesrgan_preproc->set_optimal_local_size_xyz(32, 32, 3);
 
@@ -549,6 +572,37 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
     const int h = inimage.h;
     const int channels = inimage.elempack;
 
+    // TODO: Add logs to debug errors with panels model - Start
+    fprintf(stderr,
+        "\n[DEBUG] Input image:\n"
+        "  w=%d h=%d dims=%d c=%d\n"
+        "  elempack=%d elemsize=%zu\n"
+        "  channels=%d\n",
+        inimage.w,
+        inimage.h,
+        inimage.dims,
+        inimage.c,
+        inimage.elempack,
+        (size_t)inimage.elemsize,
+        channels
+    );
+
+    if (pixeldata != nullptr && (channels == 3 || channels == 4))
+    {
+        const size_t bytes_to_print = std::min(
+            (size_t)12,
+            (size_t)w * (size_t)h * (size_t)channels
+        );
+
+        fprintf(stderr, "[DEBUG] First input bytes:");
+
+        for (size_t i = 0; i < bytes_to_print; i++)
+            fprintf(stderr, " %02X", pixeldata[i]);
+
+        fprintf(stderr, "\n");
+    }
+    // TODO: Add logs to debug errors with panels model - End
+
     const int TILE_SIZE_X = tilesize;
     const int TILE_SIZE_Y = tilesize;
 
@@ -559,6 +613,33 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
     opt.blob_vkallocator = blob_vkallocator;
     opt.workspace_vkallocator = blob_vkallocator;
     opt.staging_vkallocator = staging_vkallocator;
+
+    // TODO: Add logs to debug errors with panels model
+    fprintf(stderr,
+        "[DEBUG] Process options:\n"
+        "  use_vulkan_compute=%d\n"
+        "  use_fp16_storage=%d\n"
+        "  use_fp16_packed=%d\n"
+        "  use_fp16_arithmetic=%d\n"
+        "  use_int8_storage=%d\n"
+        "  use_int8_packed=%d\n"
+        "  use_int8_arithmetic=%d\n"
+        "  fp32_mode=%d\n"
+        "  tta_mode=%d\n"
+        "  scale=%d\n"
+        "  tilesize=%d\n",
+        opt.use_vulkan_compute,
+        opt.use_fp16_storage,
+        opt.use_fp16_packed,
+        opt.use_fp16_arithmetic,
+        opt.use_int8_storage,
+        opt.use_int8_packed,
+        opt.use_int8_arithmetic,
+        fp32_mode,
+        tta_mode,
+        scale,
+        tilesize
+    );
 
     if (channels != 3 && channels != 4)
     {
@@ -637,6 +718,21 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
         {
             out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, channels, (size_t)4u, 1, blob_vkallocator);
         }
+
+        // TODO: Add logs to debug errors with panels model
+        fprintf(stderr,
+            "[DEBUG] out_gpu:\n"
+            "  dims=%d w=%d h=%d c=%d\n"
+            "  elemsize=%zu elempack=%d\n"
+            "  cstep=%zu\n",
+            out_gpu.dims,
+            out_gpu.w,
+            out_gpu.h,
+            out_gpu.c,
+            (size_t)out_gpu.elemsize,
+            out_gpu.elempack,
+            (size_t)out_gpu.cstep
+        );
 
         for (int xi = 0; xi < xtiles; xi++)
         {
@@ -820,6 +916,21 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                         in_alpha_tile_gpu.create(tile_w_nopad, tile_h_nopad, 1, in_out_tile_elemsize, 1, blob_vkallocator);
                     }
 
+                    // TODO: Add logs to debug errors with panels model
+                    fprintf(stderr,
+                        "[DEBUG] in_tile_gpu:\n"
+                        "  dims=%d w=%d h=%d c=%d\n"
+                        "  elemsize=%zu elempack=%d\n"
+                        "  cstep=%zu\n",
+                        in_tile_gpu.dims,
+                        in_tile_gpu.w,
+                        in_tile_gpu.h,
+                        in_tile_gpu.c,
+                        (size_t)in_tile_gpu.elemsize,
+                        in_tile_gpu.elempack,
+                        (size_t)in_tile_gpu.cstep
+                    );
+
                     std::vector<ncnn::VkMat> bindings(3);
                     bindings[0] = in_gpu;
                     bindings[1] = in_tile_gpu;
@@ -876,6 +987,21 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                         net.vulkan_device()->reclaim_staging_allocator(staging_vkallocator);
                         return ret;
                     }
+
+                    // TODO: Add logs to debug errors with panels model
+                    fprintf(stderr,
+                        "[DEBUG] extract() succeeded:\n"
+                        "  dims=%d w=%d h=%d c=%d\n"
+                        "  elemsize=%zu elempack=%d\n"
+                        "  cstep=%zu\n",
+                        out_tile_gpu.dims,
+                        out_tile_gpu.w,
+                        out_tile_gpu.h,
+                        out_tile_gpu.c,
+                        (size_t)out_tile_gpu.elemsize,
+                        out_tile_gpu.elempack,
+                        (size_t)out_tile_gpu.cstep
+                    );
                 }
 
                 ncnn::VkMat out_alpha_tile_gpu;
