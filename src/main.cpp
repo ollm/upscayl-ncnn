@@ -249,7 +249,7 @@ static void print_usage()
     fprintf(stderr, "  -t tile-size         tile size (>=32/0=auto, default=0) can be 0,0,0 for multi-gpu\n");
     fprintf(stderr, "  -m model-path        folder path to the pre-trained models. default=models\n");
     fprintf(stderr, "  -n model-name        model name (default=realesrgan-x4plus, can be realesr-animevideov3 | realesrgan-x4plus-anime | realesrnet-x4plus or any other model)\n");
-    fprintf(stderr, "  -P N, --prepadding N model prepadding in pixels (default=10, 0=disabled)\n");
+    fprintf(stderr, "  -P N, --prepadding N model prepadding in pixels (default=16, 0=disabled)\n");
     fprintf(stderr, "  -g gpu-id            gpu device to use (default=auto) can be 0,1,2 for multi-gpu\n");
     fprintf(stderr, "  -j load:proc:save    thread count for load/proc/save (default=1:2:2) can be 1:2,2,2:2 for multi-gpu\n");
     fprintf(stderr, "  -x                   enable tta mode\n");
@@ -293,7 +293,7 @@ static void print_daemon_help()
     fprintf(stderr, "  -w width             resize output to a width (default=W:default), use '-r help' for more details\n");
     fprintf(stderr, "  -c compress          compression of the output image, default 0 and varies to 100\n");
     fprintf(stderr, "  -t tile-size         tile size (>=32/0=auto, default=0) can be 0,0,0 for multi-gpu\n");
-    fprintf(stderr, "  -P N, --prepadding N model prepadding in pixels (default=10, 0=disabled; set when starting daemon)\n");
+    fprintf(stderr, "  -P N, --prepadding N model prepadding in pixels (default=16, 0=disabled; set when starting daemon)\n");
     fprintf(stderr, "  -j load:proc:save    thread count for load/proc/save (default=1:2:2) can be 1:2,2,2:2 for multi-gpu\n");
     fprintf(stderr, "  -x                   enable tta mode\n");
     fprintf(stderr, "  -p                   force fp32 path (disable fp16/int8 storage)\n");
@@ -1448,7 +1448,7 @@ int main(int argc, char **argv)
     float model_mem_safe_pct = 50.f;
     int max_tile_size = 1024;
     bool diagnose_model = false;
-    int prepadding = 10;
+    int prepadding = 16;
     path_t format = PATHSTR("png");
     bool daemon_mode = false;
 
