@@ -402,7 +402,16 @@ RealESRGAN::RealESRGAN(int gpuid, bool _tta_mode, bool _fp32_mode)
     if (disable_packing && disable_packing[0] != '\0' && disable_packing[0] != '0')
     {
         net.opt.use_packing_layout = false;
-        fprintf(stderr, "⚙️ Tensor packing disabled (UPSCAYL_DISABLE_PACKING=%s)\n", disable_packing);
+        fprintf(stderr, "⚠️ Experimental tensor packing disabled (UPSCAYL_DISABLE_PACKING=%s); model output may be invalid\n", disable_packing);
+    }
+
+    const char *disable_winograd = std::getenv("UPSCAYL_DISABLE_WINOGRAD");
+    if (disable_winograd && disable_winograd[0] != '\0' && disable_winograd[0] != '0')
+    {
+        net.opt.use_winograd_convolution = false;
+        net.opt.use_winograd23_convolution = false;
+        net.opt.use_winograd43_convolution = false;
+        fprintf(stderr, "⚙️ Winograd convolution disabled (UPSCAYL_DISABLE_WINOGRAD=%s)\n", disable_winograd);
     }
 
     // Workaround for AMD RDNA2 (bug driver Vulkan) https://github.com/Tencent/ncnn/issues/6501#issuecomment-3731438810
