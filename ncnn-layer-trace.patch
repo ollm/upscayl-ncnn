@@ -1,31 +1,61 @@
 diff --git a/src/layer/vulkan/convolution_vulkan.cpp b/src/layer/vulkan/convolution_vulkan.cpp
-index 58f2ff13..40fb8f06 100644
+index 58f2ff13..6ba20f57 100644
 --- a/src/layer/vulkan/convolution_vulkan.cpp
 +++ b/src/layer/vulkan/convolution_vulkan.cpp
-@@ -9,0 +10,3 @@
+@@ -9,0 +10,4 @@
 +#include <cstdio>
++#include <cstring>
 +#include <cstdlib>
 +
-@@ -117,2 +120,2 @@ int Convolution_vulkan::create_pipeline(const Option& opt)
+@@ -117,2 +121,2 @@ int Convolution_vulkan::create_pipeline(const Option& opt)
 -    int elempack = num_input % 4 == 0 ? 4 : 1;
 -    int out_elempack = num_output % 4 == 0 ? 4 : 1;
 +    int elempack = opt.use_packing_layout && num_input % 4 == 0 ? 4 : 1;
 +    int out_elempack = opt.use_packing_layout && num_output % 4 == 0 ? 4 : 1;
-@@ -1579,0 +1583,10 @@ int Convolution_vulkan::create_pipeline(const Option& opt)
+@@ -1579,0 +1584,39 @@ int Convolution_vulkan::create_pipeline(const Option& opt)
 +        int pipeline_activation_type = activation_type;
 +
 +#if NCNN_STRING
 +        const char* disable_mish = std::getenv("UPSCAYL_DISABLE_MISH_CONVMISH35");
-+        if (disable_mish && disable_mish[0] != '\0' && disable_mish[0] != '0' && name == "convmish_35" && activation_type == 5)
++        const char* activation_override = std::getenv("UPSCAYL_CONVMISH35_ACTIVATION");
++        const bool is_target_mish = name == "convmish_35" && activation_type == 5;
++        const bool disable_target_mish = disable_mish && disable_mish[0] != '\0' && disable_mish[0] != '0' && is_target_mish;
++        const char* trace_pipelines = std::getenv("UPSCAYL_TRACE_CONVOLUTION_PIPELINES");
++        if (is_target_mish && activation_override && activation_override[0] != '\0')
++        {
++            if (strcmp(activation_override, "none") == 0)
++            {
++                pipeline_activation_type = 0;
++            }
++            else if (strcmp(activation_override, "relu") == 0)
++            {
++                pipeline_activation_type = 1;
++            }
++            else if (strcmp(activation_override, "mish") != 0)
++            {
++                fprintf(stderr,
++                        "[NCNN-LAYER-TRACE] invalid UPSCAYL_CONVMISH35_ACTIVATION='%s'; expected mish, none or relu\n",
++                        activation_override);
++            }
++        }
++        else if (disable_target_mish)
 +        {
 +            pipeline_activation_type = 0;
-+            fprintf(stderr, "[NCNN-LAYER-TRACE] Mish disabled for layer='convmish_35' (UPSCAYL_DISABLE_MISH_CONVMISH35=%s)\n", disable_mish);
++        }
++
++        if ((trace_pipelines && trace_pipelines[0] != '\0' && trace_pipelines[0] != '0') || is_target_mish)
++        {
++            fprintf(stderr,
++                    "[NCNN-LAYER-TRACE] convolution pipeline layer='%s' kernel=%dx%d input=%d output=%d elempack=%d out_elempack=%d activation=%d effective_activation=%d override='%s' legacy_disable_mish=%d\n",
++                    name.c_str(), kernel_w, kernel_h, num_input, num_output, elempack, out_elempack,
++                    activation_type, pipeline_activation_type, activation_override ? activation_override : "",
++                    disable_target_mish ? 1 : 0);
 +        }
 +#endif
-@@ -1589 +1602 @@ int Convolution_vulkan::create_pipeline(const Option& opt)
+@@ -1589 +1632 @@ int Convolution_vulkan::create_pipeline(const Option& opt)
 -        specializations[7].i = activation_type;
 +        specializations[7].i = pipeline_activation_type;
-@@ -1874 +1887 @@ int Convolution_vulkan::forward(const VkMat& bottom_blob, VkMat& top_blob, VkCom
+@@ -1874 +1917 @@ int Convolution_vulkan::forward(const VkMat& bottom_blob, VkMat& top_blob, VkCom
 -    int out_elempack = num_output % 4 == 0 ? 4 : 1;
 +    int out_elempack = opt.use_packing_layout && num_output % 4 == 0 ? 4 : 1;
 diff --git a/src/layer/vulkan/shader/vulkan_activation.comp b/src/layer/vulkan/shader/vulkan_activation.comp
@@ -49,14 +79,14 @@ index 60ebe53a..8b5f797a 100644
 -        v = v * tanh(log(exp(v) + afp(1.f)));
 +        v = v * tanh(softplus);
 diff --git a/src/net.cpp b/src/net.cpp
-index 34438abd..95a1b9fc 100644
+index 34438abd..ad633184 100644
 --- a/src/net.cpp
 +++ b/src/net.cpp
 @@ -11,0 +12,3 @@
 +#include <algorithm>
 +#include <cmath>
 +#include <cstdlib>
-@@ -32,0 +36,422 @@ static const int max_net_count = 1000000;
+@@ -32,0 +36,423 @@ static const int max_net_count = 1000000;
 +#if NCNN_VULKAN
 +struct LayerTraceStats
 +{
@@ -72,6 +102,7 @@ index 34438abd..95a1b9fc 100644
 +
 +static thread_local std::vector<unsigned char> layer_trace_blob_nonfinite;
 +static thread_local bool layer_trace_reported_first_nonfinite = false;
++static const char* layer_trace_revision = "convmish35-runtime-selector-v1";
 +
 +static bool layer_trace_enabled()
 +{
@@ -479,29 +510,29 @@ index 34438abd..95a1b9fc 100644
 +}
 +#endif // NCNN_VULKAN
 +
-@@ -375,0 +801,4 @@ int NetPrivate::forward_layer(int layer_index, std::vector<Mat>& blob_mats, std:
+@@ -375,0 +802,4 @@ int NetPrivate::forward_layer(int layer_index, std::vector<Mat>& blob_mats, std:
 +
 +    if (ret == 0 && layer_trace_enabled())
 +        trace_layer_outputs(layer_index, layer, blobs, blob_mats, blob_mats_gpu, cmd, opt);
 +
-@@ -639 +1068 @@ int NetPrivate::convert_layout(VkMat& bottom_blob, const Layer* layer, VkCompute
+@@ -639 +1069 @@ int NetPrivate::convert_layout(VkMat& bottom_blob, const Layer* layer, VkCompute
 -    if (layer->support_vulkan_packing)
 +    if (layer->support_vulkan_packing && opt.use_packing_layout)
-@@ -3185,0 +3615,9 @@ int Extractor::input(const char* blob_name, const Mat& in)
+@@ -3185,0 +3616,9 @@ int Extractor::input(const char* blob_name, const Mat& in)
 +#if NCNN_VULKAN
 +    if (layer_trace_enabled())
 +    {
 +        layer_trace_blob_nonfinite.assign(d->net->blobs().size(), 0);
 +        layer_trace_reported_first_nonfinite = false;
-+        fprintf(stderr, "[NCNN-LAYER-TRACE] scanning every model layer output for statistics and NaN/Inf\n");
++        fprintf(stderr, "[NCNN-LAYER-TRACE] revision=%s scanning every model layer output for statistics and NaN/Inf\n", layer_trace_revision);
 +    }
 +#endif
 +
-@@ -3439,0 +3878,7 @@ int Extractor::input(const char* blob_name, const VkMat& in)
+@@ -3439,0 +3879,7 @@ int Extractor::input(const char* blob_name, const VkMat& in)
 +    if (layer_trace_enabled())
 +    {
 +        layer_trace_blob_nonfinite.assign(d->net->blobs().size(), 0);
 +        layer_trace_reported_first_nonfinite = false;
-+        fprintf(stderr, "[NCNN-LAYER-TRACE] scanning every model layer output for statistics and NaN/Inf\n");
++        fprintf(stderr, "[NCNN-LAYER-TRACE] revision=%s scanning every model layer output for statistics and NaN/Inf\n", layer_trace_revision);
 +    }
 +

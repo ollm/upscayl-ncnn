@@ -14,6 +14,12 @@ static bool channel_trace_enabled()
     return value && value[0] != '\0' && value[0] != '0';
 }
 
+static bool environment_flag_enabled(const char *name)
+{
+    const char *value = std::getenv(name);
+    return value && value[0] != '\0' && value[0] != '0';
+}
+
 static bool read_trace_value(const unsigned char *data, size_t element_size, float &value)
 {
     if (element_size == sizeof(float))
@@ -398,6 +404,33 @@ RealESRGAN::RealESRGAN(int gpuid, bool _tta_mode, bool _fp32_mode)
         net.opt.use_int8_arithmetic = false;
     }
 
+    const bool vulkan_diagnostic_safe_mode = environment_flag_enabled("UPSCAYL_VULKAN_DIAGNOSTIC_SAFE_MODE");
+    if (vulkan_diagnostic_safe_mode || environment_flag_enabled("UPSCAYL_DISABLE_SUBGROUP_OPS"))
+    {
+        net.opt.use_subgroup_ops = false;
+        fprintf(stderr, "⚙️ Vulkan subgroup operations disabled\n");
+    }
+    if (vulkan_diagnostic_safe_mode || environment_flag_enabled("UPSCAYL_DISABLE_TENSOR_STORAGE"))
+    {
+        net.opt.use_tensor_storage = false;
+        fprintf(stderr, "⚙️ Vulkan tensor storage disabled\n");
+    }
+    if (vulkan_diagnostic_safe_mode || environment_flag_enabled("UPSCAYL_DISABLE_LOCAL_POOL_ALLOCATOR"))
+    {
+        net.opt.use_local_pool_allocator = false;
+        fprintf(stderr, "⚙️ Vulkan local pool allocator disabled\n");
+    }
+    if (vulkan_diagnostic_safe_mode || environment_flag_enabled("UPSCAYL_USE_HOST_WEIGHTS"))
+    {
+        net.opt.use_weights_in_host_memory = true;
+        fprintf(stderr, "⚙️ Vulkan weights kept in host memory\n");
+    }
+    if (vulkan_diagnostic_safe_mode)
+    {
+        fprintf(stderr,
+                "⚙️ Vulkan diagnostic safe mode enabled: subgroup operations, tensor storage and local pool allocator disabled; weights kept in host memory\n");
+    }
+
     const char *disable_vulkan_optimizations = std::getenv("UPSCAYL_DISABLE_VULKAN_OPTIMIZATIONS");
     if (disable_vulkan_optimizations && disable_vulkan_optimizations[0] != '\0' && disable_vulkan_optimizations[0] != '0')
     {
@@ -587,6 +620,10 @@ int RealESRGAN::load(const std::string &parampath, const std::string &modelpath)
             "  use_int8_storage=%d\n"
             "  use_int8_packed=%d\n"
             "  use_int8_arithmetic=%d\n"
+            "  use_subgroup_ops=%d\n"
+            "  use_tensor_storage=%d\n"
+            "  use_local_pool_allocator=%d\n"
+            "  use_weights_in_host_memory=%d\n"
             "  tta_mode=%d\n"
             "  bgr=%d\n",
             net.opt.use_vulkan_compute,
@@ -596,6 +633,10 @@ int RealESRGAN::load(const std::string &parampath, const std::string &modelpath)
             net.opt.use_int8_storage,
             net.opt.use_int8_packed,
             net.opt.use_int8_arithmetic,
+            net.opt.use_subgroup_ops,
+            net.opt.use_tensor_storage,
+            net.opt.use_local_pool_allocator,
+            net.opt.use_weights_in_host_memory,
             tta_mode,
             specializations[0].i
         );
@@ -830,6 +871,10 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
         "  use_int8_storage=%d\n"
         "  use_int8_packed=%d\n"
         "  use_int8_arithmetic=%d\n"
+        "  use_subgroup_ops=%d\n"
+        "  use_tensor_storage=%d\n"
+        "  use_local_pool_allocator=%d\n"
+        "  use_weights_in_host_memory=%d\n"
         "  fp32_mode=%d\n"
         "  tta_mode=%d\n"
         "  scale=%d\n"
@@ -841,6 +886,10 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
         opt.use_int8_storage,
         opt.use_int8_packed,
         opt.use_int8_arithmetic,
+        opt.use_subgroup_ops,
+        opt.use_tensor_storage,
+        opt.use_local_pool_allocator,
+        opt.use_weights_in_host_memory,
         fp32_mode,
         tta_mode,
         scale,
