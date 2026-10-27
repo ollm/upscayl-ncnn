@@ -414,6 +414,13 @@ RealESRGAN::RealESRGAN(int gpuid, bool _tta_mode, bool _fp32_mode)
         fprintf(stderr, "⚙️ Winograd convolution disabled (UPSCAYL_DISABLE_WINOGRAD=%s)\n", disable_winograd);
     }
 
+    const char *disable_sgemm = std::getenv("UPSCAYL_DISABLE_SGEMM");
+    if (disable_sgemm && disable_sgemm[0] != '\0' && disable_sgemm[0] != '0')
+    {
+        net.opt.use_sgemm_convolution = false;
+        fprintf(stderr, "⚙️ SGEMM convolution disabled (UPSCAYL_DISABLE_SGEMM=%s)\n", disable_sgemm);
+    }
+
     // Workaround for AMD RDNA2 (bug driver Vulkan) https://github.com/Tencent/ncnn/issues/6501#issuecomment-3731438810
     // net.opt.use_cooperative_matrix = false; Fixed in https://github.com/Tencent/ncnn/pull/6504
 
