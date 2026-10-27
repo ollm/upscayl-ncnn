@@ -10,6 +10,26 @@ index 58f2ff13..b52af4a6 100644
 @@ -1874 +1874 @@ int Convolution_vulkan::forward(const VkMat& bottom_blob, VkMat& top_blob, VkCom
 -    int out_elempack = num_output % 4 == 0 ? 4 : 1;
 +    int out_elempack = opt.use_packing_layout && num_output % 4 == 0 ? 4 : 1;
+diff --git a/src/layer/vulkan/shader/vulkan_activation.comp b/src/layer/vulkan/shader/vulkan_activation.comp
+index 60ebe53a..8b5f797a 100644
+--- a/src/layer/vulkan/shader/vulkan_activation.comp
++++ b/src/layer/vulkan/shader/vulkan_activation.comp
+@@ -29,0 +30 @@ afp activation_afp(afp v, int activation_type, float activation_param_0, float a
++        const afp softplus = max(v, afp(0.f)) + log(afp(1.f) + exp(-abs(v)));
+@@ -31 +32 @@ afp activation_afp(afp v, int activation_type, float activation_param_0, float a
+-        v = v * afp(tanh(float(log(exp(v) + afp(1.f)))));
++        v = v * afp(tanh(float(softplus)));
+@@ -33 +34 @@ afp activation_afp(afp v, int activation_type, float activation_param_0, float a
+-        v = v * tanh(log(exp(v) + afp(1.f)));
++        v = v * tanh(softplus);
+@@ -68,0 +70 @@ afpvec4 activation_afpvec4(afpvec4 v, int activation_type, float activation_para
++        const afpvec4 softplus = max(v, afp(0.f)) + log(afp(1.f) + exp(-abs(v)));
+@@ -70 +72 @@ afpvec4 activation_afpvec4(afpvec4 v, int activation_type, float activation_para
+-        v = v * afpvec4(tanh(vec4(log(exp(v) + afp(1.f)))));
++        v = v * afpvec4(tanh(vec4(softplus)));
+@@ -72 +74 @@ afpvec4 activation_afpvec4(afpvec4 v, int activation_type, float activation_para
+-        v = v * tanh(log(exp(v) + afp(1.f)));
++        v = v * tanh(softplus);
 diff --git a/src/net.cpp b/src/net.cpp
 index 34438abd..95a1b9fc 100644
 --- a/src/net.cpp
