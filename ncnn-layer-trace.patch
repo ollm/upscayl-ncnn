@@ -11,14 +11,14 @@ index 58f2ff13..b52af4a6 100644
 -    int out_elempack = num_output % 4 == 0 ? 4 : 1;
 +    int out_elempack = opt.use_packing_layout && num_output % 4 == 0 ? 4 : 1;
 diff --git a/src/net.cpp b/src/net.cpp
-index 34438abd..046f096e 100644
+index 34438abd..803c3791 100644
 --- a/src/net.cpp
 +++ b/src/net.cpp
 @@ -11,0 +12,3 @@
 +#include <algorithm>
 +#include <cmath>
 +#include <cstdlib>
-@@ -32,0 +36,239 @@ static const int max_net_count = 1000000;
+@@ -32,0 +36,386 @@ static const int max_net_count = 1000000;
 +#if NCNN_VULKAN
 +struct LayerTraceStats
 +{
@@ -39,6 +39,115 @@ index 34438abd..046f096e 100644
 +{
 +    const char* value = std::getenv("UPSCAYL_TRACE_LAYERS");
 +    return value && value[0] != '\0' && value[0] != '0';
++}
++
++static size_t layer_trace_max_nonfinite_locations()
++{
++    const char* value = std::getenv("UPSCAYL_TRACE_LAYER_MAX_NONFINITE");
++    if (!value || value[0] == '\0')
++        return 64;
++
++    char* end = 0;
++    const unsigned long parsed = std::strtoul(value, &end, 10);
++    return end != value && end[0] == '\0' ? (size_t)parsed : 64;
++}
++
++static void trace_nonfinite_locations(const Mat& mat, const char* label, size_t maximum_locations)
++{
++    const int element_bits = mat.elembits();
++    if (mat.empty() || (element_bits != 32 && element_bits != 16))
++        return;
++
++    const size_t pack = (size_t)mat.elempack;
++    const size_t width = (size_t)mat.w;
++    const size_t height = (size_t)mat.h;
++    const size_t depth = mat.dims == 4 ? (size_t)mat.d : 1;
++    const size_t values_per_plane = (mat.dims == 1 ? width : width * height * depth) * pack;
++    const size_t plane_count = mat.dims >= 3 ? (size_t)mat.c : 1;
++    const size_t plane_stride = mat.dims >= 3 ? (size_t)mat.cstep * pack : values_per_plane;
++    const unsigned char* data = (const unsigned char*)mat.data;
++    const size_t element_size = (size_t)element_bits / 8;
++    size_t reported = 0;
++
++    for (size_t plane = 0; plane < plane_count && reported < maximum_locations; plane++)
++    {
++        const unsigned char* plane_data = data + plane * plane_stride * element_size;
++        for (size_t i = 0; i < values_per_plane && reported < maximum_locations; i++)
++        {
++            float value;
++            if (element_bits == 32)
++            {
++                memcpy(&value, plane_data + i * element_size, sizeof(value));
++            }
++            else
++            {
++                unsigned short half;
++                memcpy(&half, plane_data + i * element_size, sizeof(half));
++                value = float16_to_float32(half);
++            }
++
++            if (!std::isnan(value) && !std::isinf(value))
++                continue;
++
++            const size_t lane = i % pack;
++            const size_t spatial = i / pack;
++            const size_t x = width ? spatial % width : 0;
++            const size_t y = width ? (spatial / width) % height : 0;
++            const size_t z = width && height ? spatial / (width * height) : 0;
++            fprintf(stderr,
++                    "[NCNN-LAYER-TRACE] NONFINITE_LOCATION %s kind=%s plane=%zu lane=%zu channel=%zu x=%zu y=%zu z=%zu value=%g\n",
++                    label, std::isnan(value) ? "nan" : "inf", plane, lane, plane * pack + lane, x, y, z, value);
++            reported++;
++        }
++    }
++
++    if (maximum_locations != 0 && reported == maximum_locations)
++        fprintf(stderr, "[NCNN-LAYER-TRACE] NONFINITE_LOCATION %s truncated_at=%zu\n", label, maximum_locations);
++}
++
++static bool dump_layer_trace_mat(const Mat& mat, const char* directory, int layer_index, int blob_index, const char* role)
++{
++    if (!directory || directory[0] == '\0' || mat.empty())
++        return false;
++
++    char path[1024];
++    const int path_length = snprintf(path, sizeof(path), "%s/layer-%d-blob-%d-%s.ncnntrace", directory, layer_index, blob_index, role);
++    if (path_length < 0 || (size_t)path_length >= sizeof(path))
++    {
++        fprintf(stderr, "[NCNN-LAYER-TRACE] dump path is too long for layer=%d blob=%d role=%s\n", layer_index, blob_index, role);
++        return false;
++    }
++
++    FILE* file = fopen(path, "wb");
++    if (!file)
++    {
++        fprintf(stderr, "[NCNN-LAYER-TRACE] failed to open dump '%s'\n", path);
++        return false;
++    }
++
++    const unsigned char magic[8] = {'N', 'C', 'N', 'N', 'T', 'R', 'C', '1'};
++    const uint32_t version = 1;
++    const int32_t metadata[] = {mat.dims, mat.w, mat.h, mat.d, mat.c, mat.elempack, mat.elembits()};
++    const uint64_t cstep = mat.cstep;
++    const uint64_t data_size = (mat.dims >= 3 ? mat.cstep * mat.c : mat.total()) * mat.elemsize;
++    const bool wrote =
++        fwrite(magic, sizeof(magic), 1, file) == 1 &&
++        fwrite(&version, sizeof(version), 1, file) == 1 &&
++        fwrite(metadata, sizeof(metadata), 1, file) == 1 &&
++        fwrite(&cstep, sizeof(cstep), 1, file) == 1 &&
++        fwrite(&data_size, sizeof(data_size), 1, file) == 1 &&
++        fwrite(mat.data, 1, (size_t)data_size, file) == data_size;
++    const bool closed = fclose(file) == 0;
++
++    if (!wrote || !closed)
++    {
++        fprintf(stderr, "[NCNN-LAYER-TRACE] failed to write dump '%s'\n", path);
++        return false;
++    }
++
++    fprintf(stderr, "[NCNN-LAYER-TRACE] DUMP_WRITTEN role=%s layer=%d blob=%d path='%s' bytes=%llu\n",
++            role, layer_index, blob_index, path, (unsigned long long)data_size);
++    return true;
 +}
 +
 +static bool scan_layer_trace_mat(const Mat& mat, LayerTraceStats& stats)
@@ -239,6 +348,44 @@ index 34438abd..046f096e 100644
 +                    host_tops[i].elembits(), stats.nan_count, stats.inf_count,
 +                    stats.minimum, stats.maximum);
 +#endif
++            char location_label[96];
++            snprintf(location_label, sizeof(location_label), "layer=%d blob=%d", layer_index, top);
++            trace_nonfinite_locations(host_tops[i], location_label, layer_trace_max_nonfinite_locations());
++
++            const char* dump_directory = std::getenv("UPSCAYL_TRACE_LAYER_DUMP_DIR");
++            if (dump_directory && dump_directory[0] != '\0')
++            {
++                for (size_t bi = 0; bi < layer->bottoms.size(); bi++)
++                {
++                    const int bottom = layer->bottoms[bi];
++                    if (bottom < 0 || bottom >= (int)blobs.size())
++                        continue;
++
++                    Mat host_bottom;
++                    if (blob_mats_gpu[bottom].dims != 0)
++                    {
++                        cmd.record_clone(blob_mats_gpu[bottom], host_bottom, opt);
++                        const int submit_ret = cmd.submit_and_wait();
++                        const int reset_ret = cmd.reset();
++                        if (submit_ret != 0 || reset_ret != 0)
++                        {
++                            fprintf(stderr,
++                                    "[NCNN-LAYER-TRACE] failed to read input blob=%d for dump (submit=%d reset=%d)\n",
++                                    bottom, submit_ret, reset_ret);
++                            continue;
++                        }
++                    }
++                    else
++                    {
++                        host_bottom = blob_mats[bottom];
++                    }
++
++                    char role[32];
++                    snprintf(role, sizeof(role), "input-%zu", bi);
++                    dump_layer_trace_mat(host_bottom, dump_directory, layer_index, bottom, role);
++                }
++                dump_layer_trace_mat(host_tops[i], dump_directory, layer_index, top, "output");
++            }
 +            fprintf(stderr, "[NCNN-LAYER-TRACE] layer inputs:");
 +            for (size_t bi = 0; bi < layer->bottoms.size(); bi++)
 +            {
@@ -258,15 +405,15 @@ index 34438abd..046f096e 100644
 +}
 +#endif // NCNN_VULKAN
 +
-@@ -375,0 +618,4 @@ int NetPrivate::forward_layer(int layer_index, std::vector<Mat>& blob_mats, std:
+@@ -375,0 +765,4 @@ int NetPrivate::forward_layer(int layer_index, std::vector<Mat>& blob_mats, std:
 +
 +    if (ret == 0 && layer_trace_enabled())
 +        trace_layer_outputs(layer_index, layer, blobs, blob_mats, blob_mats_gpu, cmd, opt);
 +
-@@ -639 +885 @@ int NetPrivate::convert_layout(VkMat& bottom_blob, const Layer* layer, VkCompute
+@@ -639 +1032 @@ int NetPrivate::convert_layout(VkMat& bottom_blob, const Layer* layer, VkCompute
 -    if (layer->support_vulkan_packing)
 +    if (layer->support_vulkan_packing && opt.use_packing_layout)
-@@ -3185,0 +3432,9 @@ int Extractor::input(const char* blob_name, const Mat& in)
+@@ -3185,0 +3579,9 @@ int Extractor::input(const char* blob_name, const Mat& in)
 +#if NCNN_VULKAN
 +    if (layer_trace_enabled())
 +    {
@@ -276,7 +423,7 @@ index 34438abd..046f096e 100644
 +    }
 +#endif
 +
-@@ -3439,0 +3695,7 @@ int Extractor::input(const char* blob_name, const VkMat& in)
+@@ -3439,0 +3842,7 @@ int Extractor::input(const char* blob_name, const VkMat& in)
 +    if (layer_trace_enabled())
 +    {
 +        layer_trace_blob_nonfinite.assign(d->net->blobs().size(), 0);
