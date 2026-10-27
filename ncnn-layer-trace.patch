@@ -1,5 +1,5 @@
 diff --git a/src/layer/vulkan/convolution_vulkan.cpp b/src/layer/vulkan/convolution_vulkan.cpp
-index 58f2ff13..6ba20f57 100644
+index 58f2ff13..9b7136a9 100644
 --- a/src/layer/vulkan/convolution_vulkan.cpp
 +++ b/src/layer/vulkan/convolution_vulkan.cpp
 @@ -9,0 +10,4 @@
@@ -7,55 +7,100 @@ index 58f2ff13..6ba20f57 100644
 +#include <cstring>
 +#include <cstdlib>
 +
-@@ -117,2 +121,2 @@ int Convolution_vulkan::create_pipeline(const Option& opt)
+@@ -11,0 +16,40 @@ namespace ncnn {
++static bool trace_layer_name_selected(const char* names, const std::string& layer_name)
++{
++    if (!names || names[0] == '\0')
++        return false;
++
++    const char* cursor = names;
++    while (*cursor)
++    {
++        while (*cursor == ',' || *cursor == ' ' || *cursor == '\t')
++            cursor++;
++
++        const char* end = cursor;
++        while (*end && *end != ',')
++            end++;
++
++        const size_t length = end - cursor;
++        if (length == layer_name.size() && strncmp(cursor, layer_name.c_str(), length) == 0)
++            return true;
++
++        cursor = end;
++    }
++
++    return false;
++}
++
++static int trace_activation_override(const char* value, const char* variable_name, const std::string& layer_name, int default_activation)
++{
++    if (!value || value[0] == '\0' || strcmp(value, "mish") == 0)
++        return default_activation;
++    if (strcmp(value, "none") == 0)
++        return 0;
++    if (strcmp(value, "relu") == 0)
++        return 1;
++
++    fprintf(stderr,
++            "[NCNN-LAYER-TRACE] invalid %s='%s' for layer='%s'; expected mish, none or relu\n",
++            variable_name, value, layer_name.c_str());
++    return default_activation;
++}
++
+@@ -117,2 +161,2 @@ int Convolution_vulkan::create_pipeline(const Option& opt)
 -    int elempack = num_input % 4 == 0 ? 4 : 1;
 -    int out_elempack = num_output % 4 == 0 ? 4 : 1;
 +    int elempack = opt.use_packing_layout && num_input % 4 == 0 ? 4 : 1;
 +    int out_elempack = opt.use_packing_layout && num_output % 4 == 0 ? 4 : 1;
-@@ -1579,0 +1584,39 @@ int Convolution_vulkan::create_pipeline(const Option& opt)
+@@ -1579,0 +1624,43 @@ int Convolution_vulkan::create_pipeline(const Option& opt)
 +        int pipeline_activation_type = activation_type;
 +
 +#if NCNN_STRING
 +        const char* disable_mish = std::getenv("UPSCAYL_DISABLE_MISH_CONVMISH35");
-+        const char* activation_override = std::getenv("UPSCAYL_CONVMISH35_ACTIVATION");
-+        const bool is_target_mish = name == "convmish_35" && activation_type == 5;
++        const bool is_convmish = name.compare(0, 9, "convmish_") == 0 && activation_type == 5;
++        const bool is_target_mish = name == "convmish_35" && is_convmish;
++        const char* selected_layers = std::getenv("UPSCAYL_CONVMISH_LAYERS");
++        const bool is_selected_mish = is_convmish && trace_layer_name_selected(selected_layers, name);
 +        const bool disable_target_mish = disable_mish && disable_mish[0] != '\0' && disable_mish[0] != '0' && is_target_mish;
++        const char* activation_override = is_target_mish ? std::getenv("UPSCAYL_CONVMISH35_ACTIVATION") : 0;
++        const char* selected_activation = std::getenv("UPSCAYL_CONVMISH_SELECTED_ACTIVATION");
++        const char* all_activation = std::getenv("UPSCAYL_CONVMISH_ACTIVATION");
 +        const char* trace_pipelines = std::getenv("UPSCAYL_TRACE_CONVOLUTION_PIPELINES");
-+        if (is_target_mish && activation_override && activation_override[0] != '\0')
++        const char* override_source = "";
++        if (activation_override && activation_override[0] != '\0')
 +        {
-+            if (strcmp(activation_override, "none") == 0)
-+            {
-+                pipeline_activation_type = 0;
-+            }
-+            else if (strcmp(activation_override, "relu") == 0)
-+            {
-+                pipeline_activation_type = 1;
-+            }
-+            else if (strcmp(activation_override, "mish") != 0)
-+            {
-+                fprintf(stderr,
-+                        "[NCNN-LAYER-TRACE] invalid UPSCAYL_CONVMISH35_ACTIVATION='%s'; expected mish, none or relu\n",
-+                        activation_override);
-+            }
++            pipeline_activation_type = trace_activation_override(activation_override, "UPSCAYL_CONVMISH35_ACTIVATION", name, pipeline_activation_type);
++            override_source = "convmish35";
++        }
++        else if (is_selected_mish && selected_activation && selected_activation[0] != '\0')
++        {
++            pipeline_activation_type = trace_activation_override(selected_activation, "UPSCAYL_CONVMISH_SELECTED_ACTIVATION", name, pipeline_activation_type);
++            override_source = "selected";
++        }
++        else if (is_convmish && all_activation && all_activation[0] != '\0')
++        {
++            pipeline_activation_type = trace_activation_override(all_activation, "UPSCAYL_CONVMISH_ACTIVATION", name, pipeline_activation_type);
++            override_source = "all";
 +        }
 +        else if (disable_target_mish)
 +        {
 +            pipeline_activation_type = 0;
++            override_source = "legacy-disable";
 +        }
 +
-+        if ((trace_pipelines && trace_pipelines[0] != '\0' && trace_pipelines[0] != '0') || is_target_mish)
++        if ((trace_pipelines && trace_pipelines[0] != '\0' && trace_pipelines[0] != '0') || is_convmish)
 +        {
 +            fprintf(stderr,
-+                    "[NCNN-LAYER-TRACE] convolution pipeline layer='%s' kernel=%dx%d input=%d output=%d elempack=%d out_elempack=%d activation=%d effective_activation=%d override='%s' legacy_disable_mish=%d\n",
++                    "[NCNN-LAYER-TRACE] convolution pipeline layer='%s' kernel=%dx%d input=%d output=%d elempack=%d out_elempack=%d activation=%d effective_activation=%d override_source='%s' selected=%d\n",
 +                    name.c_str(), kernel_w, kernel_h, num_input, num_output, elempack, out_elempack,
-+                    activation_type, pipeline_activation_type, activation_override ? activation_override : "",
-+                    disable_target_mish ? 1 : 0);
++                    activation_type, pipeline_activation_type, override_source, is_selected_mish ? 1 : 0);
 +        }
 +#endif
-@@ -1589 +1632 @@ int Convolution_vulkan::create_pipeline(const Option& opt)
+@@ -1589 +1676 @@ int Convolution_vulkan::create_pipeline(const Option& opt)
 -        specializations[7].i = activation_type;
 +        specializations[7].i = pipeline_activation_type;
-@@ -1874 +1917 @@ int Convolution_vulkan::forward(const VkMat& bottom_blob, VkMat& top_blob, VkCom
+@@ -1874 +1961 @@ int Convolution_vulkan::forward(const VkMat& bottom_blob, VkMat& top_blob, VkCom
 -    int out_elempack = num_output % 4 == 0 ? 4 : 1;
 +    int out_elempack = opt.use_packing_layout && num_output % 4 == 0 ? 4 : 1;
 diff --git a/src/layer/vulkan/shader/vulkan_activation.comp b/src/layer/vulkan/shader/vulkan_activation.comp
@@ -79,7 +124,7 @@ index 60ebe53a..8b5f797a 100644
 -        v = v * tanh(log(exp(v) + afp(1.f)));
 +        v = v * tanh(softplus);
 diff --git a/src/net.cpp b/src/net.cpp
-index 34438abd..ad633184 100644
+index 34438abd..d463354b 100644
 --- a/src/net.cpp
 +++ b/src/net.cpp
 @@ -11,0 +12,3 @@
@@ -102,7 +147,7 @@ index 34438abd..ad633184 100644
 +
 +static thread_local std::vector<unsigned char> layer_trace_blob_nonfinite;
 +static thread_local bool layer_trace_reported_first_nonfinite = false;
-+static const char* layer_trace_revision = "convmish35-runtime-selector-v1";
++static const char* layer_trace_revision = "convmish-runtime-selector-v2";
 +
 +static bool layer_trace_enabled()
 +{
