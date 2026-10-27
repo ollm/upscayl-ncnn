@@ -1,0 +1,274 @@
+diff --git a/src/net.cpp b/src/net.cpp
+index b47fb170..0b4a222a 100644
+--- a/src/net.cpp
++++ b/src/net.cpp
+@@ -9,7 +9,10 @@
+ #include "modelbin.h"
+ #include "paramdict.h"
+ 
++#include <algorithm>
+ #include <limits.h>
++#include <cmath>
++#include <cstdlib>
+ #include <stdarg.h>
+ #include <stdint.h>
+ #include <string.h>
+@@ -30,6 +33,217 @@ namespace ncnn {
+ static const int max_net_count = 1000000;
+ #endif // NCNN_VALIDATION
+ 
++#if NCNN_VULKAN
++struct LayerTraceStats
++{
++    size_t nan_count;
++    size_t inf_count;
++    size_t value_count;
++    float minimum;
++    float maximum;
++};
++
++static thread_local std::vector<unsigned char> layer_trace_blob_nonfinite;
++static thread_local bool layer_trace_reported_first_nonfinite = false;
++
++static bool layer_trace_enabled()
++{
++    const char* value = std::getenv("UPSCAYL_TRACE_LAYERS");
++    return value && value[0] != '\0' && value[0] != '0';
++}
++
++static bool scan_layer_trace_mat(const Mat& mat, LayerTraceStats& stats)
++{
++    stats.nan_count = 0;
++    stats.inf_count = 0;
++    stats.value_count = 0;
++    stats.minimum = 0.f;
++    stats.maximum = 0.f;
++
++    if (mat.empty())
++        return false;
++
++    const int element_bits = mat.elembits();
++    if (element_bits != 32 && element_bits != 16)
++        return false;
++
++    const size_t pack = (size_t)mat.elempack;
++    const size_t width = (size_t)mat.w;
++    const size_t height = (size_t)mat.h;
++    const size_t depth = mat.dims == 4 ? (size_t)mat.d : 1;
++    const size_t values_per_plane = (mat.dims == 1 ? width : width * height * depth) * pack;
++    const size_t plane_count = mat.dims >= 3 ? (size_t)mat.c : 1;
++    const size_t plane_stride = mat.dims >= 3 ? (size_t)mat.cstep * pack : values_per_plane;
++    const unsigned char* data = (const unsigned char*)mat.data;
++    const size_t element_size = (size_t)element_bits / 8;
++
++    for (size_t plane = 0; plane < plane_count; plane++)
++    {
++        const unsigned char* plane_data = data + plane * plane_stride * element_size;
++        for (size_t i = 0; i < values_per_plane; i++)
++        {
++            float value;
++            if (element_bits == 32)
++            {
++                memcpy(&value, plane_data + i * element_size, sizeof(value));
++            }
++            else
++            {
++                unsigned short half;
++                memcpy(&half, plane_data + i * element_size, sizeof(half));
++                value = float16_to_float32(half);
++            }
++
++            if (std::isnan(value))
++            {
++                stats.nan_count++;
++            }
++            else if (std::isinf(value))
++            {
++                stats.inf_count++;
++            }
++            else
++            {
++                if (stats.value_count == 0)
++                {
++                    stats.minimum = value;
++                    stats.maximum = value;
++                }
++                else
++                {
++                    stats.minimum = std::min(stats.minimum, value);
++                    stats.maximum = std::max(stats.maximum, value);
++                }
++                stats.value_count++;
++            }
++        }
++    }
++
++    return true;
++}
++
++static void trace_layer_outputs(
++    int layer_index,
++    const Layer* layer,
++    const std::vector<Blob>& blobs,
++    const std::vector<Mat>& blob_mats,
++    const std::vector<VkMat>& blob_mats_gpu,
++    VkCompute& cmd,
++    const Option& opt)
++{
++    if (!layer_trace_enabled())
++        return;
++
++    bool input_has_nonfinite = false;
++    for (size_t i = 0; i < layer->bottoms.size(); i++)
++    {
++        const int bottom = layer->bottoms[i];
++        if (bottom >= 0 && bottom < (int)layer_trace_blob_nonfinite.size())
++            input_has_nonfinite = input_has_nonfinite || layer_trace_blob_nonfinite[bottom] != 0;
++    }
++
++    std::vector<Mat> host_tops(layer->tops.size());
++    bool recorded_readback = false;
++    for (size_t i = 0; i < layer->tops.size(); i++)
++    {
++        const int top = layer->tops[i];
++        if (top < 0 || top >= (int)blobs.size())
++            continue;
++
++        if (blob_mats_gpu[top].dims != 0)
++        {
++            cmd.record_clone(blob_mats_gpu[top], host_tops[i], opt);
++            recorded_readback = true;
++        }
++        else
++        {
++            host_tops[i] = blob_mats[top];
++        }
++    }
++
++    if (recorded_readback)
++    {
++        const int submit_ret = cmd.submit_and_wait();
++        const int reset_ret = cmd.reset();
++        if (submit_ret != 0 || reset_ret != 0)
++        {
++            fprintf(stderr,
++                    "[NCNN-LAYER-TRACE] layer=%d readback failed (submit=%d reset=%d)\n",
++                    layer_index, submit_ret, reset_ret);
++            return;
++        }
++    }
++
++    for (size_t i = 0; i < layer->tops.size(); i++)
++    {
++        const int top = layer->tops[i];
++        if (top < 0 || top >= (int)blobs.size())
++            continue;
++
++        LayerTraceStats stats;
++        if (!scan_layer_trace_mat(host_tops[i], stats))
++        {
++            fprintf(stderr,
++                    "[NCNN-LAYER-TRACE] layer=%d top_blob=%d unsupported/empty tensor for scan\n",
++                    layer_index, top);
++            continue;
++        }
++
++        const bool has_nonfinite = stats.nan_count != 0 || stats.inf_count != 0;
++        if (top < (int)layer_trace_blob_nonfinite.size())
++            layer_trace_blob_nonfinite[top] = has_nonfinite ? 1 : 0;
++
++        if (!has_nonfinite && blobs[top].consumer == -1)
++        {
++#if NCNN_STRING
++            fprintf(stderr, "[NCNN-LAYER-TRACE] OUTPUT_FINITE blob='%s' layer_index=%d\n",
++                    blobs[top].name.c_str(), layer_index);
++#else
++            fprintf(stderr, "[NCNN-LAYER-TRACE] OUTPUT_FINITE blob_index=%d layer_index=%d\n",
++                    top, layer_index);
++#endif
++        }
++
++        if (has_nonfinite && !input_has_nonfinite && !layer_trace_reported_first_nonfinite)
++        {
++#if NCNN_STRING
++            fprintf(stderr,
++                    "[NCNN-LAYER-TRACE] FIRST_NONFINITE layer_index=%d layer='%s' type='%s' "
++                    "top_blob_index=%d blob='%s' dims=%d w=%d h=%d d=%d c=%d "
++                    "elempack=%d elembits=%d nan=%zu inf=%zu finite_min=%.9g finite_max=%.9g\n",
++                    layer_index, layer->name.c_str(), layer->type.c_str(), top, blobs[top].name.c_str(),
++                    host_tops[i].dims, host_tops[i].w, host_tops[i].h, host_tops[i].d, host_tops[i].c,
++                    host_tops[i].elempack, host_tops[i].elembits(),
++                    stats.nan_count, stats.inf_count, stats.minimum, stats.maximum);
++#else
++            fprintf(stderr,
++                    "[NCNN-LAYER-TRACE] FIRST_NONFINITE layer_index=%d top_blob_index=%d "
++                    "dims=%d w=%d h=%d d=%d c=%d elempack=%d elembits=%d "
++                    "nan=%zu inf=%zu finite_min=%.9g finite_max=%.9g\n",
++                    layer_index, top, host_tops[i].dims, host_tops[i].w, host_tops[i].h,
++                    host_tops[i].d, host_tops[i].c, host_tops[i].elempack,
++                    host_tops[i].elembits(), stats.nan_count, stats.inf_count,
++                    stats.minimum, stats.maximum);
++#endif
++            fprintf(stderr, "[NCNN-LAYER-TRACE] layer inputs:");
++            for (size_t bi = 0; bi < layer->bottoms.size(); bi++)
++            {
++                const int bottom = layer->bottoms[bi];
++                if (bottom < 0 || bottom >= (int)blobs.size())
++                    continue;
++#if NCNN_STRING
++                fprintf(stderr, " %s(index=%d)", blobs[bottom].name.c_str(), bottom);
++#else
++                fprintf(stderr, " %d", bottom);
++#endif
++            }
++            fprintf(stderr, "\n");
++            layer_trace_reported_first_nonfinite = true;
++        }
++    }
++}
++#endif // NCNN_VULKAN
++
+ class NetPrivate
+ {
+ public:
+@@ -373,6 +587,10 @@ int NetPrivate::forward_layer(int layer_index, std::vector<Mat>& blob_mats, std:
+         }
+ #endif
+     }
++
++    if (ret == 0 && layer_trace_enabled())
++        trace_layer_outputs(layer_index, layer, blobs, blob_mats, blob_mats_gpu, cmd, opt);
++
+     if (ret != 0)
+         return ret;
+ 
+@@ -3183,6 +3401,15 @@ int Extractor::input(int blob_index, const Mat& in)
+     if (blob_index < 0 || blob_index >= (int)d->blob_mats.size())
+         return -1;
+ 
++#if NCNN_VULKAN
++    if (layer_trace_enabled())
++    {
++        layer_trace_blob_nonfinite.assign(d->net->blobs().size(), 0);
++        layer_trace_reported_first_nonfinite = false;
++        fprintf(stderr, "[NCNN-LAYER-TRACE] scanning every model layer output for NaN/Inf\n");
++    }
++#endif
++
+     d->blob_mats[blob_index] = in;
+ 
+     return 0;
+@@ -3437,6 +3664,13 @@ int Extractor::input(int blob_index, const VkMat& in)
+     if (blob_index < 0 || blob_index >= (int)d->blob_mats.size())
+         return -1;
+ 
++    if (layer_trace_enabled())
++    {
++        layer_trace_blob_nonfinite.assign(d->net->blobs().size(), 0);
++        layer_trace_reported_first_nonfinite = false;
++        fprintf(stderr, "[NCNN-LAYER-TRACE] scanning every model layer output for NaN/Inf\n");
++    }
++
+     d->blob_mats_gpu[blob_index] = in;
+ 
+     return 0;
