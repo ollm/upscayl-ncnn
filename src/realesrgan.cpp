@@ -398,6 +398,21 @@ RealESRGAN::RealESRGAN(int gpuid, bool _tta_mode, bool _fp32_mode)
         net.opt.use_int8_arithmetic = false;
     }
 
+    const char *disable_vulkan_optimizations = std::getenv("UPSCAYL_DISABLE_VULKAN_OPTIMIZATIONS");
+    if (disable_vulkan_optimizations && disable_vulkan_optimizations[0] != '\0' && disable_vulkan_optimizations[0] != '0')
+    {
+        net.opt.use_winograd_convolution = false;
+        net.opt.use_winograd23_convolution = false;
+        net.opt.use_winograd43_convolution = false;
+        net.opt.use_sgemm_convolution = false;
+        net.opt.use_cooperative_matrix = false;
+        net.opt.use_shader_local_memory = false;
+        fprintf(stderr,
+                "⚙️ Vulkan optimizations disabled: Winograd, SGEMM, cooperative matrix and shader local memory "
+                "(UPSCAYL_DISABLE_VULKAN_OPTIMIZATIONS=%s)\n",
+                disable_vulkan_optimizations);
+    }
+
     const char *disable_packing = std::getenv("UPSCAYL_DISABLE_PACKING");
     if (disable_packing && disable_packing[0] != '\0' && disable_packing[0] != '0')
     {
