@@ -5,7 +5,169 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
+
+static bool channel_trace_enabled()
+{
+    const char *value = std::getenv("UPSCAYL_TRACE_CHANNELS");
+    return value && value[0] != '\0' && value[0] != '0';
+}
+
+static bool read_trace_value(const unsigned char *data, size_t element_size, float &value)
+{
+    if (element_size == sizeof(float))
+    {
+        std::memcpy(&value, data, sizeof(value));
+        return true;
+    }
+
+    if (element_size == sizeof(unsigned short))
+    {
+        unsigned short half;
+        std::memcpy(&half, data, sizeof(half));
+        value = ncnn::float16_to_float32(half);
+        return true;
+    }
+
+    if (element_size == sizeof(unsigned char))
+    {
+        value = *data;
+        return true;
+    }
+
+    return false;
+}
+
+static void print_channel_stats(const char *label, int channel, double minimum, double maximum, double sum, size_t count, const float samples[3])
+{
+    fprintf(stderr,
+            "[CHANNEL-TRACE] %s channel=%d min=%.7g max=%.7g mean=%.7g samples=(%.7g,%.7g,%.7g)\n",
+            label, channel, minimum, maximum, count ? sum / count : 0.0,
+            samples[0], samples[1], samples[2]);
+}
+
+static void trace_mat_channels(const char *label, const ncnn::Mat &mat)
+{
+    if (!channel_trace_enabled() || mat.empty())
+        return;
+
+    fprintf(stderr, "[CHANNEL-TRACE] %s dims=%d w=%d h=%d c=%d elempack=%d elemsize=%zu cstep=%zu\n",
+            label, mat.dims, mat.w, mat.h, mat.c, mat.elempack, (size_t)mat.elemsize, (size_t)mat.cstep);
+
+    if (mat.dims == 3 && mat.c > 0 && mat.elempack == 1)
+    {
+        const size_t element_size = mat.elemsize;
+        const size_t sample_positions[3] = {0, (size_t)(mat.h / 2) * mat.w + mat.w / 2, (size_t)mat.h * mat.w - 1};
+        for (int c = 0; c < mat.c; c++)
+        {
+            double minimum = 0.0;
+            double maximum = 0.0;
+            double sum = 0.0;
+            float samples[3] = {};
+            size_t count = 0;
+            bool supported = true;
+            const unsigned char *channel_data = (const unsigned char *)mat.data + (size_t)c * mat.cstep * element_size;
+            for (int y = 0; y < mat.h; y++)
+            {
+                for (int x = 0; x < mat.w; x++)
+                {
+                    const size_t position = (size_t)y * mat.w + x;
+                    float value;
+                    if (!read_trace_value(channel_data + position * element_size, element_size, value))
+                    {
+                        supported = false;
+                        break;
+                    }
+
+                    if (count == 0)
+                    {
+                        minimum = value;
+                        maximum = value;
+                    }
+                    else
+                    {
+                        minimum = std::min(minimum, (double)value);
+                        maximum = std::max(maximum, (double)value);
+                    }
+                    sum += value;
+                    count++;
+                }
+                if (!supported)
+                    break;
+            }
+
+            if (!supported)
+            {
+                fprintf(stderr, "[CHANNEL-TRACE] %s channel=%d unsupported element size=%zu\n", label, c, element_size);
+                continue;
+            }
+            for (int i = 0; i < 3; i++)
+                read_trace_value(channel_data + sample_positions[i] * element_size, element_size, samples[i]);
+            print_channel_stats(label, c, minimum, maximum, sum, count, samples);
+        }
+        return;
+    }
+
+    if (mat.dims == 2 && mat.elemsize >= 3 && mat.elemsize <= 4)
+    {
+        const int channels = mat.elempack > 1 ? mat.elempack : (int)mat.elemsize;
+        if (channels < 3 || channels > 4 || mat.elemsize % channels != 0)
+            return;
+
+        const size_t bytes_per_channel = mat.elemsize / channels;
+        const size_t pixel_count = (size_t)mat.w * mat.h;
+        const size_t sample_positions[3] = {0, pixel_count / 2, pixel_count - 1};
+        for (int c = 0; c < channels; c++)
+        {
+            double minimum = 0.0;
+            double maximum = 0.0;
+            double sum = 0.0;
+            float samples[3] = {};
+            for (size_t i = 0; i < pixel_count; i++)
+            {
+                float value;
+                const unsigned char *pixel = (const unsigned char *)mat.data + i * mat.elemsize;
+                if (!read_trace_value(pixel + c * bytes_per_channel, bytes_per_channel, value))
+                    return;
+                if (i == 0)
+                {
+                    minimum = value;
+                    maximum = value;
+                }
+                else
+                {
+                    minimum = std::min(minimum, (double)value);
+                    maximum = std::max(maximum, (double)value);
+                }
+                sum += value;
+            }
+            for (int i = 0; i < 3; i++)
+            {
+                const unsigned char *pixel = (const unsigned char *)mat.data + sample_positions[i] * mat.elemsize;
+                read_trace_value(pixel + c * bytes_per_channel, bytes_per_channel, samples[i]);
+            }
+            print_channel_stats(label, c, minimum, maximum, sum, pixel_count, samples);
+        }
+    }
+}
+
+static void trace_vk_channels(const char *label, const ncnn::VkMat &vkmat, ncnn::VkCompute &cmd, const ncnn::Option &opt)
+{
+    if (!channel_trace_enabled())
+        return;
+
+    ncnn::Mat host;
+    cmd.record_clone(vkmat, host, opt);
+    const int ret = cmd.submit_and_wait();
+    cmd.reset();
+    if (ret != 0)
+    {
+        fprintf(stderr, "[CHANNEL-TRACE] %s GPU readback failed (code=%d)\n", label, ret);
+        return;
+    }
+    trace_mat_channels(label, host);
+}
 
 static const uint32_t realesrgan_preproc_spv_data[] = {
 #include "realesrgan_preproc.spv.hex.h"
@@ -603,7 +765,13 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
     }
     // TODO: Add logs to debug errors with panels model - End
 
-    const int TILE_SIZE_X = tilesize;
+#if _WIN32
+        trace_mat_channels("decoded input pixels (BGR)", inimage);
+#else
+        trace_mat_channels("decoded input pixels (RGB)", inimage);
+#endif
+
+        const int TILE_SIZE_X = tilesize;
     const int TILE_SIZE_Y = tilesize;
 
     ncnn::VkAllocator *blob_vkallocator = net.vulkan_device()->acquire_blob_allocator();
@@ -691,6 +859,9 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
 #endif
             }
         }
+
+        if (yi == 0)
+            trace_mat_channels("CPU tensor before upload (first tile)", in);
 
         ncnn::VkCompute cmd(net.vulkan_device());
 
@@ -803,6 +974,9 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                     cmd.record_pipeline(realesrgan_preproc, bindings, constants, dispatcher);
                 }
 
+                if (yi == 0 && xi == 0)
+                    trace_vk_channels("preprocessed model input (TTA transform 0)", in_tile_gpu[0], cmd, opt);
+
                 // realesrgan
                 ncnn::VkMat out_tile_gpu[8];
                 for (int ti = 0; ti < 8; ti++)
@@ -837,6 +1011,9 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                         cmd.submit_and_wait();
                         cmd.reset();
                     }
+
+                    if (yi == 0 && xi == 0 && ti == 0)
+                        trace_vk_channels("model output before TTA merge (transform 0)", out_tile_gpu[ti], cmd, opt);
                 }
 
                 ncnn::VkMat out_alpha_tile_gpu;
@@ -959,6 +1136,9 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                     cmd.record_pipeline(realesrgan_preproc, bindings, constants, dispatcher);
                 }
 
+                if (yi == 0 && xi == 0)
+                    trace_vk_channels("preprocessed model input", in_tile_gpu, cmd, opt);
+
                 // realesrgan
                 ncnn::VkMat out_tile_gpu;
                 {
@@ -998,11 +1178,14 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                         out_tile_gpu.w,
                         out_tile_gpu.h,
                         out_tile_gpu.c,
-                        (size_t)out_tile_gpu.elemsize,
+                        out_tile_gpu.elemsize,
                         out_tile_gpu.elempack,
-                        (size_t)out_tile_gpu.cstep
+                        out_tile_gpu.cstep
                     );
                 }
+
+                if (yi == 0 && xi == 0)
+                    trace_vk_channels("model output before postprocessing", out_tile_gpu, cmd, opt);
 
                 ncnn::VkMat out_alpha_tile_gpu;
                 if (channels == 4)
@@ -1065,6 +1248,9 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
             fprintf(stderr, "%.2f%%\n", (float)(yi * xtiles + xi) / (ytiles * xtiles) * 100);
         }
 
+        if (yi == 0)
+            trace_vk_channels("postprocessed GPU output", out_gpu, cmd, opt);
+
         // download
         {
             ncnn::Mat out;
@@ -1099,6 +1285,12 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
             }
         }
     }
+
+#if _WIN32
+    trace_mat_channels("final output pixels before encoding (BGR)", outimage);
+#else
+    trace_mat_channels("final output pixels before encoding (RGB)", outimage);
+#endif
 
     net.vulkan_device()->reclaim_blob_allocator(blob_vkallocator);
     net.vulkan_device()->reclaim_staging_allocator(staging_vkallocator);
