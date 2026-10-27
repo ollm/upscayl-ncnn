@@ -1,22 +1,24 @@
+diff --git a/src/layer/vulkan/convolution_vulkan.cpp b/src/layer/vulkan/convolution_vulkan.cpp
+index 064d504b..fb22139e 100644
+--- a/src/layer/vulkan/convolution_vulkan.cpp
++++ b/src/layer/vulkan/convolution_vulkan.cpp
+@@ -117,2 +117,2 @@ int Convolution_vulkan::create_pipeline(const Option& opt)
+-    int elempack = num_input % 4 == 0 ? 4 : 1;
+-    int out_elempack = num_output % 4 == 0 ? 4 : 1;
++    int elempack = opt.use_packing_layout && num_input % 4 == 0 ? 4 : 1;
++    int out_elempack = opt.use_packing_layout && num_output % 4 == 0 ? 4 : 1;
+@@ -1874 +1874 @@ int Convolution_vulkan::forward(const VkMat& bottom_blob, VkMat& top_blob, VkCom
+-    int out_elempack = num_output % 4 == 0 ? 4 : 1;
++    int out_elempack = opt.use_packing_layout && num_output % 4 == 0 ? 4 : 1;
 diff --git a/src/net.cpp b/src/net.cpp
-index b47fb170..0b4a222a 100644
+index b47fb170..309e75ec 100644
 --- a/src/net.cpp
 +++ b/src/net.cpp
-@@ -9,7 +9,10 @@
- #include "modelbin.h"
- #include "paramdict.h"
- 
+@@ -11,0 +12,3 @@
 +#include <algorithm>
- #include <limits.h>
 +#include <cmath>
 +#include <cstdlib>
- #include <stdarg.h>
- #include <stdint.h>
- #include <string.h>
-@@ -30,6 +33,217 @@ namespace ncnn {
- static const int max_net_count = 1000000;
- #endif // NCNN_VALIDATION
- 
+@@ -32,0 +36,211 @@ static const int max_net_count = 1000000;
 +#if NCNN_VULKAN
 +struct LayerTraceStats
 +{
@@ -228,24 +230,15 @@ index b47fb170..0b4a222a 100644
 +}
 +#endif // NCNN_VULKAN
 +
- class NetPrivate
- {
- public:
-@@ -373,6 +587,10 @@ int NetPrivate::forward_layer(int layer_index, std::vector<Mat>& blob_mats, std:
-         }
- #endif
-     }
+@@ -375,0 +590,4 @@ int NetPrivate::forward_layer(int layer_index, std::vector<Mat>& blob_mats, std:
 +
 +    if (ret == 0 && layer_trace_enabled())
 +        trace_layer_outputs(layer_index, layer, blobs, blob_mats, blob_mats_gpu, cmd, opt);
 +
-     if (ret != 0)
-         return ret;
- 
-@@ -3183,6 +3401,15 @@ int Extractor::input(int blob_index, const Mat& in)
-     if (blob_index < 0 || blob_index >= (int)d->blob_mats.size())
-         return -1;
- 
+@@ -627 +845 @@ int NetPrivate::convert_layout(VkMat& bottom_blob, const Layer* layer, VkCompute
+-    if (layer->support_vulkan_packing)
++    if (layer->support_vulkan_packing && opt.use_packing_layout)
+@@ -3185,0 +3404,9 @@ int Extractor::input(int blob_index, const Mat& in)
 +#if NCNN_VULKAN
 +    if (layer_trace_enabled())
 +    {
@@ -255,13 +248,7 @@ index b47fb170..0b4a222a 100644
 +    }
 +#endif
 +
-     d->blob_mats[blob_index] = in;
- 
-     return 0;
-@@ -3437,6 +3664,13 @@ int Extractor::input(int blob_index, const VkMat& in)
-     if (blob_index < 0 || blob_index >= (int)d->blob_mats.size())
-         return -1;
- 
+@@ -3439,0 +3667,7 @@ int Extractor::input(int blob_index, const VkMat& in)
 +    if (layer_trace_enabled())
 +    {
 +        layer_trace_blob_nonfinite.assign(d->net->blobs().size(), 0);
@@ -269,6 +256,3 @@ index b47fb170..0b4a222a 100644
 +        fprintf(stderr, "[NCNN-LAYER-TRACE] scanning every model layer output for NaN/Inf\n");
 +    }
 +
-     d->blob_mats_gpu[blob_index] = in;
- 
-     return 0;
