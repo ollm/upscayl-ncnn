@@ -1,13 +1,31 @@
 diff --git a/src/layer/vulkan/convolution_vulkan.cpp b/src/layer/vulkan/convolution_vulkan.cpp
-index 58f2ff13..b52af4a6 100644
+index 58f2ff13..40fb8f06 100644
 --- a/src/layer/vulkan/convolution_vulkan.cpp
 +++ b/src/layer/vulkan/convolution_vulkan.cpp
-@@ -117,2 +117,2 @@ int Convolution_vulkan::create_pipeline(const Option& opt)
+@@ -9,0 +10,3 @@
++#include <cstdio>
++#include <cstdlib>
++
+@@ -117,2 +120,2 @@ int Convolution_vulkan::create_pipeline(const Option& opt)
 -    int elempack = num_input % 4 == 0 ? 4 : 1;
 -    int out_elempack = num_output % 4 == 0 ? 4 : 1;
 +    int elempack = opt.use_packing_layout && num_input % 4 == 0 ? 4 : 1;
 +    int out_elempack = opt.use_packing_layout && num_output % 4 == 0 ? 4 : 1;
-@@ -1874 +1874 @@ int Convolution_vulkan::forward(const VkMat& bottom_blob, VkMat& top_blob, VkCom
+@@ -1579,0 +1583,10 @@ int Convolution_vulkan::create_pipeline(const Option& opt)
++        int pipeline_activation_type = activation_type;
++
++#if NCNN_STRING
++        const char* disable_mish = std::getenv("UPSCAYL_DISABLE_MISH_CONVMISH35");
++        if (disable_mish && disable_mish[0] != '\0' && disable_mish[0] != '0' && name == "convmish_35" && activation_type == 5)
++        {
++            pipeline_activation_type = 0;
++            fprintf(stderr, "[NCNN-LAYER-TRACE] Mish disabled for layer='convmish_35' (UPSCAYL_DISABLE_MISH_CONVMISH35=%s)\n", disable_mish);
++        }
++#endif
+@@ -1589 +1602 @@ int Convolution_vulkan::create_pipeline(const Option& opt)
+-        specializations[7].i = activation_type;
++        specializations[7].i = pipeline_activation_type;
+@@ -1874 +1887 @@ int Convolution_vulkan::forward(const VkMat& bottom_blob, VkMat& top_blob, VkCom
 -    int out_elempack = num_output % 4 == 0 ? 4 : 1;
 +    int out_elempack = opt.use_packing_layout && num_output % 4 == 0 ? 4 : 1;
 diff --git a/src/layer/vulkan/shader/vulkan_activation.comp b/src/layer/vulkan/shader/vulkan_activation.comp
