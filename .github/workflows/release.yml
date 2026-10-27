@@ -43,7 +43,7 @@ jobs:
           submodules: recursive
 
       - name: Apply ncnn layer-trace patch
-        run: git -C src/ncnn apply "$GITHUB_WORKSPACE/ncnn-layer-trace.patch"
+        run: git -C src/ncnn apply --unidiff-zero "$GITHUB_WORKSPACE/ncnn-layer-trace.patch"
 
       - name: Vulkan SDK
         run: |
@@ -234,7 +234,7 @@ jobs:
           submodules: recursive
 
       - name: Apply ncnn layer-trace patch
-        run: git -C src/ncnn apply "$env:GITHUB_WORKSPACE/ncnn-layer-trace.patch"
+        run: git -C src/ncnn apply --unidiff-zero "$env:GITHUB_WORKSPACE/ncnn-layer-trace.patch"
 
       - name: Vulkan SDK
         run: |
