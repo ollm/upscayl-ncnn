@@ -42,6 +42,9 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Apply ncnn layer-trace patch
+        run: git -C src/ncnn apply "$GITHUB_WORKSPACE/ncnn-layer-trace.patch"
+
       - name: Vulkan SDK
         run: |
           wget https://sdk.lunarg.com/sdk/download/${{ env.VK_VERSION }}/linux/vulkansdk-linux-x86_64-${{ env.VK_VERSION }}.tar.xz?Human=true -O vk.tar.xz
