@@ -1,5 +1,5 @@
 diff --git a/src/layer/vulkan/convolution_vulkan.cpp b/src/layer/vulkan/convolution_vulkan.cpp
-index 58f2ff13..9b7136a9 100644
+index 58f2ff13..6d0fe2d8 100644
 --- a/src/layer/vulkan/convolution_vulkan.cpp
 +++ b/src/layer/vulkan/convolution_vulkan.cpp
 @@ -9,0 +10,4 @@
@@ -7,7 +7,7 @@ index 58f2ff13..9b7136a9 100644
 +#include <cstring>
 +#include <cstdlib>
 +
-@@ -11,0 +16,40 @@ namespace ncnn {
+@@ -11,0 +16,42 @@ namespace ncnn {
 +static bool trace_layer_name_selected(const char* names, const std::string& layer_name)
 +{
 +    if (!names || names[0] == '\0')
@@ -41,19 +41,21 @@ index 58f2ff13..9b7136a9 100644
 +        return 0;
 +    if (strcmp(value, "relu") == 0)
 +        return 1;
++    if (strcmp(value, "mish-safe") == 0)
++        return 7;
 +
 +    fprintf(stderr,
-+            "[NCNN-LAYER-TRACE] invalid %s='%s' for layer='%s'; expected mish, none or relu\n",
++            "[NCNN-LAYER-TRACE] invalid %s='%s' for layer='%s'; expected mish, mish-safe, none or relu\n",
 +            variable_name, value, layer_name.c_str());
 +    return default_activation;
 +}
 +
-@@ -117,2 +161,2 @@ int Convolution_vulkan::create_pipeline(const Option& opt)
+@@ -117,2 +163,2 @@ int Convolution_vulkan::create_pipeline(const Option& opt)
 -    int elempack = num_input % 4 == 0 ? 4 : 1;
 -    int out_elempack = num_output % 4 == 0 ? 4 : 1;
 +    int elempack = opt.use_packing_layout && num_input % 4 == 0 ? 4 : 1;
 +    int out_elempack = opt.use_packing_layout && num_output % 4 == 0 ? 4 : 1;
-@@ -1579,0 +1624,43 @@ int Convolution_vulkan::create_pipeline(const Option& opt)
+@@ -1579,0 +1626,43 @@ int Convolution_vulkan::create_pipeline(const Option& opt)
 +        int pipeline_activation_type = activation_type;
 +
 +#if NCNN_STRING
@@ -97,14 +99,14 @@ index 58f2ff13..9b7136a9 100644
 +                    activation_type, pipeline_activation_type, override_source, is_selected_mish ? 1 : 0);
 +        }
 +#endif
-@@ -1589 +1676 @@ int Convolution_vulkan::create_pipeline(const Option& opt)
+@@ -1589 +1678 @@ int Convolution_vulkan::create_pipeline(const Option& opt)
 -        specializations[7].i = activation_type;
 +        specializations[7].i = pipeline_activation_type;
-@@ -1874 +1961 @@ int Convolution_vulkan::forward(const VkMat& bottom_blob, VkMat& top_blob, VkCom
+@@ -1874 +1963 @@ int Convolution_vulkan::forward(const VkMat& bottom_blob, VkMat& top_blob, VkCom
 -    int out_elempack = num_output % 4 == 0 ? 4 : 1;
 +    int out_elempack = opt.use_packing_layout && num_output % 4 == 0 ? 4 : 1;
 diff --git a/src/layer/vulkan/shader/vulkan_activation.comp b/src/layer/vulkan/shader/vulkan_activation.comp
-index 60ebe53a..8b5f797a 100644
+index 60ebe53a..b154e702 100644
 --- a/src/layer/vulkan/shader/vulkan_activation.comp
 +++ b/src/layer/vulkan/shader/vulkan_activation.comp
 @@ -29,0 +30 @@ afp activation_afp(afp v, int activation_type, float activation_param_0, float a
@@ -115,14 +117,47 @@ index 60ebe53a..8b5f797a 100644
 @@ -33 +34 @@ afp activation_afp(afp v, int activation_type, float activation_param_0, float a
 -        v = v * tanh(log(exp(v) + afp(1.f)));
 +        v = v * tanh(softplus);
-@@ -68,0 +70 @@ afpvec4 activation_afpvec4(afpvec4 v, int activation_type, float activation_para
+@@ -41,0 +43,8 @@ afp activation_afp(afp v, int activation_type, float activation_param_0, float a
++    if (activation_type == 7)
++    {
++        if (v <= afp(20.f))
++        {
++            const afp softplus = max(v, afp(0.f)) + log(afp(1.f) + exp(-abs(v)));
++            v = v * tanh(softplus);
++        }
++    }
+@@ -68,0 +78 @@ afpvec4 activation_afpvec4(afpvec4 v, int activation_type, float activation_para
 +        const afpvec4 softplus = max(v, afp(0.f)) + log(afp(1.f) + exp(-abs(v)));
-@@ -70 +72 @@ afpvec4 activation_afpvec4(afpvec4 v, int activation_type, float activation_para
+@@ -70 +80 @@ afpvec4 activation_afpvec4(afpvec4 v, int activation_type, float activation_para
 -        v = v * afpvec4(tanh(vec4(log(exp(v) + afp(1.f)))));
 +        v = v * afpvec4(tanh(vec4(softplus)));
-@@ -72 +74 @@ afpvec4 activation_afpvec4(afpvec4 v, int activation_type, float activation_para
+@@ -72 +82 @@ afpvec4 activation_afpvec4(afpvec4 v, int activation_type, float activation_para
 -        v = v * tanh(log(exp(v) + afp(1.f)));
 +        v = v * tanh(softplus);
+@@ -80,0 +91,23 @@ afpvec4 activation_afpvec4(afpvec4 v, int activation_type, float activation_para
++    if (activation_type == 7)
++    {
++        if (v.x <= afp(20.f))
++        {
++            const afp softplus = max(v.x, afp(0.f)) + log(afp(1.f) + exp(-abs(v.x)));
++            v.x = v.x * tanh(softplus);
++        }
++        if (v.y <= afp(20.f))
++        {
++            const afp softplus = max(v.y, afp(0.f)) + log(afp(1.f) + exp(-abs(v.y)));
++            v.y = v.y * tanh(softplus);
++        }
++        if (v.z <= afp(20.f))
++        {
++            const afp softplus = max(v.z, afp(0.f)) + log(afp(1.f) + exp(-abs(v.z)));
++            v.z = v.z * tanh(softplus);
++        }
++        if (v.w <= afp(20.f))
++        {
++            const afp softplus = max(v.w, afp(0.f)) + log(afp(1.f) + exp(-abs(v.w)));
++            v.w = v.w * tanh(softplus);
++        }
++    }
 diff --git a/src/net.cpp b/src/net.cpp
 index 34438abd..d463354b 100644
 --- a/src/net.cpp
