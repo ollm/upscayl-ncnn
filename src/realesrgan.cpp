@@ -398,6 +398,13 @@ RealESRGAN::RealESRGAN(int gpuid, bool _tta_mode, bool _fp32_mode)
         net.opt.use_int8_arithmetic = false;
     }
 
+    const char *disable_packing = std::getenv("UPSCAYL_DISABLE_PACKING");
+    if (disable_packing && disable_packing[0] != '\0' && disable_packing[0] != '0')
+    {
+        net.opt.use_packing_layout = false;
+        fprintf(stderr, "⚙️ Tensor packing disabled (UPSCAYL_DISABLE_PACKING=%s)\n", disable_packing);
+    }
+
     // Workaround for AMD RDNA2 (bug driver Vulkan) https://github.com/Tencent/ncnn/issues/6501#issuecomment-3731438810
     // net.opt.use_cooperative_matrix = false; Fixed in https://github.com/Tencent/ncnn/pull/6504
 
