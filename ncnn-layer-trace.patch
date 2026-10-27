@@ -11,14 +11,14 @@ index 58f2ff13..b52af4a6 100644
 -    int out_elempack = num_output % 4 == 0 ? 4 : 1;
 +    int out_elempack = opt.use_packing_layout && num_output % 4 == 0 ? 4 : 1;
 diff --git a/src/net.cpp b/src/net.cpp
-index 34438abd..803c3791 100644
+index 34438abd..95a1b9fc 100644
 --- a/src/net.cpp
 +++ b/src/net.cpp
 @@ -11,0 +12,3 @@
 +#include <algorithm>
 +#include <cmath>
 +#include <cstdlib>
-@@ -32,0 +36,386 @@ static const int max_net_count = 1000000;
+@@ -32,0 +36,422 @@ static const int max_net_count = 1000000;
 +#if NCNN_VULKAN
 +struct LayerTraceStats
 +{
@@ -50,6 +50,38 @@ index 34438abd..803c3791 100644
 +    char* end = 0;
 +    const unsigned long parsed = std::strtoul(value, &end, 10);
 +    return end != value && end[0] == '\0' ? (size_t)parsed : 64;
++}
++
++static bool layer_trace_should_dump_blob(int blob_index)
++{
++    const char* value = std::getenv("UPSCAYL_TRACE_LAYER_DUMP_BLOBS");
++    if (!value || value[0] == '\0')
++        return false;
++
++    const char* cursor = value;
++    while (*cursor)
++    {
++        while (*cursor == ',' || *cursor == ' ' || *cursor == '\t')
++            cursor++;
++
++        char* end = 0;
++        const long parsed = std::strtol(cursor, &end, 10);
++        if (end == cursor)
++        {
++            while (*cursor && *cursor != ',')
++                cursor++;
++            continue;
++        }
++
++        if (parsed == blob_index)
++            return true;
++
++        cursor = end;
++        while (*cursor && *cursor != ',')
++            cursor++;
++    }
++
++    return false;
 +}
 +
 +static void trace_nonfinite_locations(const Mat& mat, const char* label, size_t maximum_locations)
@@ -316,6 +348,10 @@ index 34438abd..803c3791 100644
 +                stats.value_count ? std::sqrt(stats.squared_sum / stats.value_count) : 0.0,
 +                stats.absolute_maximum);
 +
++        const char* dump_directory = std::getenv("UPSCAYL_TRACE_LAYER_DUMP_DIR");
++        if (dump_directory && dump_directory[0] != '\0' && layer_trace_should_dump_blob(top))
++            dump_layer_trace_mat(host_tops[i], dump_directory, layer_index, top, "selected");
++
 +        if (!has_nonfinite && blobs[top].consumer == -1)
 +        {
 +#if NCNN_STRING
@@ -405,15 +441,15 @@ index 34438abd..803c3791 100644
 +}
 +#endif // NCNN_VULKAN
 +
-@@ -375,0 +765,4 @@ int NetPrivate::forward_layer(int layer_index, std::vector<Mat>& blob_mats, std:
+@@ -375,0 +801,4 @@ int NetPrivate::forward_layer(int layer_index, std::vector<Mat>& blob_mats, std:
 +
 +    if (ret == 0 && layer_trace_enabled())
 +        trace_layer_outputs(layer_index, layer, blobs, blob_mats, blob_mats_gpu, cmd, opt);
 +
-@@ -639 +1032 @@ int NetPrivate::convert_layout(VkMat& bottom_blob, const Layer* layer, VkCompute
+@@ -639 +1068 @@ int NetPrivate::convert_layout(VkMat& bottom_blob, const Layer* layer, VkCompute
 -    if (layer->support_vulkan_packing)
 +    if (layer->support_vulkan_packing && opt.use_packing_layout)
-@@ -3185,0 +3579,9 @@ int Extractor::input(const char* blob_name, const Mat& in)
+@@ -3185,0 +3615,9 @@ int Extractor::input(const char* blob_name, const Mat& in)
 +#if NCNN_VULKAN
 +    if (layer_trace_enabled())
 +    {
@@ -423,7 +459,7 @@ index 34438abd..803c3791 100644
 +    }
 +#endif
 +
-@@ -3439,0 +3842,7 @@ int Extractor::input(const char* blob_name, const VkMat& in)
+@@ -3439,0 +3878,7 @@ int Extractor::input(const char* blob_name, const VkMat& in)
 +    if (layer_trace_enabled())
 +    {
 +        layer_trace_blob_nonfinite.assign(d->net->blobs().size(), 0);
