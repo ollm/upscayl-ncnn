@@ -1,0 +1,116 @@
+diff --git a/src/layer/vulkan/shader/mish.comp b/src/layer/vulkan/shader/mish.comp
+index 0e4d7650..97983ffe 100644
+--- a/src/layer/vulkan/shader/mish.comp
++++ b/src/layer/vulkan/shader/mish.comp
+@@ -21,11 +21,42 @@ void main()
+ 
+     afpvec4 v = buffer_ld4(bottom_top_blob_data, gi);
+ 
++    if (v.x <= afp(20.f))
++    {
++        const afp softplus = max(v.x, afp(0.f)) + log(afp(1.f) + exp(-abs(v.x)));
+ #if NCNN_moltenvk
+-    v = v * afpvec4(tanh(vec4(log(exp(v) + afpvec4(1.f)))));
++        v.x = v.x * afp(tanh(float(softplus)));
+ #else
+-    v = v * tanh(log(exp(v) + afpvec4(1.f)));
++        v.x = v.x * tanh(softplus);
+ #endif
++    }
++    if (v.y <= afp(20.f))
++    {
++        const afp softplus = max(v.y, afp(0.f)) + log(afp(1.f) + exp(-abs(v.y)));
++#if NCNN_moltenvk
++        v.y = v.y * afp(tanh(float(softplus)));
++#else
++        v.y = v.y * tanh(softplus);
++#endif
++    }
++    if (v.z <= afp(20.f))
++    {
++        const afp softplus = max(v.z, afp(0.f)) + log(afp(1.f) + exp(-abs(v.z)));
++#if NCNN_moltenvk
++        v.z = v.z * afp(tanh(float(softplus)));
++#else
++        v.z = v.z * tanh(softplus);
++#endif
++    }
++    if (v.w <= afp(20.f))
++    {
++        const afp softplus = max(v.w, afp(0.f)) + log(afp(1.f) + exp(-abs(v.w)));
++#if NCNN_moltenvk
++        v.w = v.w * afp(tanh(float(softplus)));
++#else
++        v.w = v.w * tanh(softplus);
++#endif
++    }
+ 
+     buffer_st4(bottom_top_blob_data, gi, v);
+ }
+diff --git a/src/layer/vulkan/shader/vulkan_activation.comp b/src/layer/vulkan/shader/vulkan_activation.comp
+index 60ebe53a..d9474aa5 100644
+--- a/src/layer/vulkan/shader/vulkan_activation.comp
++++ b/src/layer/vulkan/shader/vulkan_activation.comp
+@@ -27,11 +27,15 @@ afp activation_afp(afp v, int activation_type, float activation_param_0, float a
+     }
+     if (activation_type == 5)
+     {
++        if (v <= afp(20.f))
++        {
++            const afp softplus = max(v, afp(0.f)) + log(afp(1.f) + exp(-abs(v)));
+ #if NCNN_moltenvk
+-        v = v * afp(tanh(float(log(exp(v) + afp(1.f)))));
++            v = v * afp(tanh(float(softplus)));
+ #else
+-        v = v * tanh(log(exp(v) + afp(1.f)));
++            v = v * tanh(softplus);
+ #endif
++        }
+     }
+     if (activation_type == 6)
+     {
+@@ -66,11 +70,42 @@ afpvec4 activation_afpvec4(afpvec4 v, int activation_type, float activation_para
+     }
+     if (activation_type == 5)
+     {
++        if (v.x <= afp(20.f))
++        {
++            const afp softplus = max(v.x, afp(0.f)) + log(afp(1.f) + exp(-abs(v.x)));
+ #if NCNN_moltenvk
+-        v = v * afpvec4(tanh(vec4(log(exp(v) + afp(1.f)))));
++            v.x = v.x * afp(tanh(float(softplus)));
+ #else
+-        v = v * tanh(log(exp(v) + afp(1.f)));
++            v.x = v.x * tanh(softplus);
+ #endif
++        }
++        if (v.y <= afp(20.f))
++        {
++            const afp softplus = max(v.y, afp(0.f)) + log(afp(1.f) + exp(-abs(v.y)));
++#if NCNN_moltenvk
++            v.y = v.y * afp(tanh(float(softplus)));
++#else
++            v.y = v.y * tanh(softplus);
++#endif
++        }
++        if (v.z <= afp(20.f))
++        {
++            const afp softplus = max(v.z, afp(0.f)) + log(afp(1.f) + exp(-abs(v.z)));
++#if NCNN_moltenvk
++            v.z = v.z * afp(tanh(float(softplus)));
++#else
++            v.z = v.z * tanh(softplus);
++#endif
++        }
++        if (v.w <= afp(20.f))
++        {
++            const afp softplus = max(v.w, afp(0.f)) + log(afp(1.f) + exp(-abs(v.w)));
++#if NCNN_moltenvk
++            v.w = v.w * afp(tanh(float(softplus)));
++#else
++            v.w = v.w * tanh(softplus);
++#endif
++        }
+     }
+     if (activation_type == 6)
+     {

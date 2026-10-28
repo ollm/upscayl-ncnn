@@ -42,6 +42,9 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Apply ncnn Vulkan Mish patch
+        run: git -C src/ncnn apply "$GITHUB_WORKSPACE/ncnn-vulkan-mish.patch"
+
       - name: Vulkan SDK
         run: |
           wget https://sdk.lunarg.com/sdk/download/${{ env.VK_VERSION }}/linux/vulkansdk-linux-x86_64-${{ env.VK_VERSION }}.tar.xz?Human=true -O vk.tar.xz
@@ -81,6 +84,9 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Apply ncnn Vulkan Mish patch
+        run: git -C src/ncnn apply "$GITHUB_WORKSPACE/ncnn-vulkan-mish.patch"
+
       - name: Vulkan SDK
         run: |
           wget https://github.com/jakoch/vulkan-sdk-arm/releases/download/${{ env.VK_VERSION }}/vulkansdk-ubuntu-24.04-arm-${{ env.VK_VERSION }}.tar.xz -O vk-arm64.tar.xz
@@ -117,6 +123,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - name: Apply ncnn Vulkan Mish patch
+        run: git -C src/ncnn apply "$GITHUB_WORKSPACE/ncnn-vulkan-mish.patch"
 
       - name: Dependencies
         run: brew install libomp glslang
@@ -158,6 +167,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - name: Apply ncnn Vulkan Mish patch
+        run: git -C src/ncnn apply "$GITHUB_WORKSPACE/ncnn-vulkan-mish.patch"
 
       - name: Dependencies
         run: brew install libomp glslang
@@ -230,6 +242,9 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Apply ncnn Vulkan Mish patch
+        run: git -C src/ncnn apply "$env:GITHUB_WORKSPACE\ncnn-vulkan-mish.patch"
+
       - name: Vulkan SDK
         run: |
           Invoke-WebRequest https://sdk.lunarg.com/sdk/download/${{ env.VK_VERSION }}/windows/vulkansdk-windows-X64-${{ env.VK_VERSION }}.exe -OutFile vk.exe
@@ -263,6 +278,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - name: Apply ncnn Vulkan Mish patch
+        run: git -C src/ncnn apply "$env:GITHUB_WORKSPACE\ncnn-vulkan-mish.patch"
 
       - name: Vulkan SDK
         run: |
