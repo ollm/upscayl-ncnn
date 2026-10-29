@@ -49,6 +49,9 @@ layout (push_constant) uniform parameter
 
     int alphaw;
     int alphah;
+
+    int stride_w;
+    int rotated_stride_w;
 } p;
 
 void main()
@@ -73,14 +76,14 @@ void main()
         int sy = gy + p.crop_y;
         int sx = gx + p.crop_x;
 
-        float v0 = float(bottom_blob0_data[gzi + sy * p.w + sx]);
-        float v1 = float(bottom_blob1_data[gzi + sy * p.w + (p.w - 1 - sx)]);
-        float v2 = float(bottom_blob2_data[gzi + (p.h - 1 - sy) * p.w + (p.w - 1 - sx)]);
-        float v3 = float(bottom_blob3_data[gzi + (p.h - 1 - sy) * p.w + sx]);
-        float v4 = float(bottom_blob4_data[gzi + sx * p.h + sy]);
-        float v5 = float(bottom_blob5_data[gzi + sx * p.h + (p.h - 1 - sy)]);
-        float v6 = float(bottom_blob6_data[gzi + (p.w - 1 - sx) * p.h + (p.h - 1 - sy)]);
-        float v7 = float(bottom_blob7_data[gzi + (p.w - 1 - sx) * p.h + sy]);
+        float v0 = float(bottom_blob0_data[gzi + sy * p.stride_w + sx]);
+        float v1 = float(bottom_blob1_data[gzi + sy * p.stride_w + (p.w - 1 - sx)]);
+        float v2 = float(bottom_blob2_data[gzi + (p.h - 1 - sy) * p.stride_w + (p.w - 1 - sx)]);
+        float v3 = float(bottom_blob3_data[gzi + (p.h - 1 - sy) * p.stride_w + sx]);
+        float v4 = float(bottom_blob4_data[gzi + sx * p.rotated_stride_w + sy]);
+        float v5 = float(bottom_blob5_data[gzi + sx * p.rotated_stride_w + (p.h - 1 - sy)]);
+        float v6 = float(bottom_blob6_data[gzi + (p.w - 1 - sx) * p.rotated_stride_w + (p.h - 1 - sy)]);
+        float v7 = float(bottom_blob7_data[gzi + (p.w - 1 - sx) * p.rotated_stride_w + sy]);
 
         v = (v0 + v1 + v2 + v3 + v4 + v5 + v6 + v7) * 0.125f;
 

@@ -214,6 +214,7 @@ compile_shader(realesrgan_preproc.comp)
 compile_shader(realesrgan_postproc.comp)
 compile_shader(realesrgan_preproc_tta.comp)
 compile_shader(realesrgan_postproc_tta.comp)
+compile_shader(realesrgan_align.comp)
 
 add_custom_target(generate-spirv DEPENDS ${SHADER_SPV_HEX_FILES})
 

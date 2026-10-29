@@ -250,6 +250,7 @@ static void print_usage()
     fprintf(stderr, "  -m model-path        folder path to the pre-trained models. default=models\n");
     fprintf(stderr, "  -n model-name        model name (default=realesrgan-x4plus, can be realesr-animevideov3 | realesrgan-x4plus-anime | realesrnet-x4plus or any other model)\n");
     fprintf(stderr, "  -P N, --prepadding N model prepadding in pixels (default=10, 0=disabled)\n");
+    fprintf(stderr, "  -A N, --input-alignment N pad model inputs to a multiple of N (1..4096, default=1)\n");
     fprintf(stderr, "  -g gpu-id            gpu device to use (default=auto) can be 0,1,2 for multi-gpu\n");
     fprintf(stderr, "  -j load:proc:save    thread count for load/proc/save (default=1:2:2) can be 1:2,2,2:2 for multi-gpu\n");
     fprintf(stderr, "  -x                   enable tta mode\n");
@@ -840,6 +841,7 @@ struct ProcessParams
     int tta_mode;
     int fp32_mode;
     int prepadding;
+    int input_alignment;
     path_t format;
 };
 
@@ -850,7 +852,7 @@ static ProcessParams create_process_params(
     const std::vector<int> &tilesize, const path_t &model,
     const path_t &modelname, const std::vector<int> &gpuid,
     int jobs_load, const std::vector<int> &jobs_proc, int jobs_save,
-    int verbose, int tta_mode, int fp32_mode, int prepadding, const path_t &format)
+    int verbose, int tta_mode, int fp32_mode, int prepadding, int input_alignment, const path_t &format)
 {
     ProcessParams params;
     params.scale = scale;
@@ -873,6 +875,7 @@ static ProcessParams create_process_params(
     params.tta_mode = tta_mode;
     params.fp32_mode = fp32_mode;
     params.prepadding = prepadding;
+    params.input_alignment = input_alignment;
     params.format = format;
     return params;
 }
@@ -1146,6 +1149,7 @@ static int run_daemon_mode(ProcessParams &params)
         realesrgan[i]->scale = params.scale;
         realesrgan[i]->tilesize = params.tilesize[i];
         realesrgan[i]->prepadding = prepadding;
+        realesrgan[i]->input_alignment = params.input_alignment;
     }
     fprintf(stderr, "✅ Model loaded successfully!\n");
 #if _WIN32
@@ -1449,6 +1453,7 @@ int main(int argc, char **argv)
     int max_tile_size = 1024;
     bool diagnose_model = false;
     int prepadding = 10;
+    int input_alignment = 1;
     path_t format = PATHSTR("png");
     bool daemon_mode = false;
 
@@ -1480,6 +1485,25 @@ int main(int argc, char **argv)
                 }
 
                 prepadding = static_cast<int>(value);
+                continue;
+            }
+            if (wcscmp(argv[i], L"--input-alignment") == 0 || wcscmp(argv[i], L"-A") == 0)
+            {
+                if (i + 1 >= argc)
+                {
+                    fwprintf(stderr, L"🚨 Error: Missing value for --input-alignment!\n");
+                    return -1;
+                }
+
+                wchar_t *endptr = nullptr;
+                const long value = wcstol(argv[++i], &endptr, 10);
+                if (endptr == argv[i] || *endptr != L'\0' || value < 1 || value > 4096)
+                {
+                    fwprintf(stderr, L"🚨 Error: Invalid input alignment; expected an integer from 1 to 4096.\n");
+                    return -1;
+                }
+
+                input_alignment = static_cast<int>(value);
                 continue;
             }
             if (wcscmp(argv[i], L"--max-tilesize") == 0)
@@ -1534,6 +1558,25 @@ int main(int argc, char **argv)
                 prepadding = static_cast<int>(value);
                 continue;
             }
+            if (strcmp(argv[i], "--input-alignment") == 0 || strcmp(argv[i], "-A") == 0)
+            {
+                if (i + 1 >= argc)
+                {
+                    fprintf(stderr, "🚨 Error: Missing value for --input-alignment!\n");
+                    return -1;
+                }
+
+                char *endptr = nullptr;
+                const long value = strtol(argv[++i], &endptr, 10);
+                if (endptr == argv[i] || *endptr != '\0' || value < 1 || value > 4096)
+                {
+                    fprintf(stderr, "🚨 Error: Invalid input alignment; expected an integer from 1 to 4096.\n");
+                    return -1;
+                }
+
+                input_alignment = static_cast<int>(value);
+                continue;
+            }
             if (strcmp(argv[i], "--max-tilesize") == 0)
             {
                 if (i + 1 >= argc)
@@ -1562,7 +1605,7 @@ int main(int argc, char **argv)
     setlocale(LC_ALL, "");
     wchar_t opt;
     fprintf(stderr, "🚀 Starting Upscayl - Copyright © 2024\n");
-    while ((opt = getopt(argc, argv, L"i:o:z:s:r:w:t:c:m:n:g:j:f:y:u:k:vxphd")) != (wchar_t)-1)
+    while ((opt = getopt(argc, argv, L"i:o:z:s:r:w:t:c:m:n:g:j:f:y:u:k:vxphdA:")) != (wchar_t)-1)
     {
         switch (opt)
         {
@@ -1623,6 +1666,14 @@ int main(int argc, char **argv)
         case L'n':
             modelname = optarg;
             break;
+        case L'A':
+            input_alignment = _wtoi(optarg);
+            if (input_alignment < 1 || input_alignment > 4096)
+            {
+                fwprintf(stderr, L"🚨 Error: Invalid input alignment; expected an integer from 1 to 4096.\n");
+                return -1;
+            }
+            break;
         case L'g':
             gpuid = parse_optarg_int_array(optarg);
             break;
@@ -1678,7 +1729,7 @@ int main(int argc, char **argv)
 #else  // _WIN32
     int opt;
     fprintf(stderr, "🚀 Starting Upscayl - Copyright © 2024\n");
-    while ((opt = getopt(argc, argv, "i:o:z:s:r:w:t:c:m:n:g:j:f:y:u:k:vxphd")) != -1)
+    while ((opt = getopt(argc, argv, "i:o:z:s:r:w:t:c:m:n:g:j:f:y:u:k:vxphdA:")) != -1)
     {
         switch (opt)
         {
@@ -1738,6 +1789,14 @@ int main(int argc, char **argv)
             break;
         case 'n':
             modelname = optarg;
+            break;
+        case 'A':
+            input_alignment = atoi(optarg);
+            if (input_alignment < 1 || input_alignment > 4096)
+            {
+                fprintf(stderr, "🚨 Error: Invalid input alignment; expected an integer from 1 to 4096.\n");
+                return -1;
+            }
             break;
         case 'g':
             gpuid = parse_optarg_int_array(optarg);
@@ -2135,10 +2194,11 @@ int main(int argc, char **argv)
             diagnostic.scale = scale;
             diagnostic.tilesize = tilesize[i];
             diagnostic.prepadding = prepadding;
+            diagnostic.input_alignment = input_alignment;
 
             // Runtime dry-run to catch extract/backend incompatibilities that load() alone cannot detect.
-            const int test_w = 64;
-            const int test_h = 64;
+            const int test_w = 64 + (input_alignment > 1 ? 1 : 0);
+            const int test_h = 64 + (input_alignment > 1 ? 3 : 0);
             std::vector<unsigned char> test_pixels(test_w * test_h * 3, 127);
             ncnn::Mat test_in(test_w, test_h, (void *)test_pixels.data(), (size_t)3u, 3);
             ncnn::Mat test_out(test_w * scale, test_h * scale, (size_t)3u, 3);
@@ -2185,7 +2245,7 @@ int main(int argc, char **argv)
             outputScale, hasOutputScale, compression,
             resizeProvided, hasCustomWidth, tilesize, model,
             modelname, gpuid, jobs_load, jobs_proc, jobs_save,
-            verbose, tta_mode, fp32_mode, prepadding, format);
+            verbose, tta_mode, fp32_mode, prepadding, input_alignment, format);
 
         int result = run_daemon_mode(params);
         
@@ -2201,7 +2261,7 @@ int main(int argc, char **argv)
             outputScale, hasOutputScale, compression,
             resizeProvided, hasCustomWidth, tilesize, model,
             modelname, gpuid, jobs_load, jobs_proc, jobs_save,
-            verbose, tta_mode, fp32_mode, prepadding, format);
+            verbose, tta_mode, fp32_mode, prepadding, input_alignment, format);
 
         std::vector<RealESRGAN *> realesrgan(use_gpu_count);
 
@@ -2229,6 +2289,7 @@ int main(int argc, char **argv)
             realesrgan[i]->scale = scale;
             realesrgan[i]->tilesize = tilesize[i];
             realesrgan[i]->prepadding = prepadding;
+            realesrgan[i]->input_alignment = input_alignment;
         }
 
         int result = process_image_batch(inputpath, outputpath, params, realesrgan, prepadding);

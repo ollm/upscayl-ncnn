@@ -44,6 +44,12 @@ static const uint32_t realesrgan_postproc_tta_fp16s_spv_data[] = {
 static const uint32_t realesrgan_postproc_tta_int8s_spv_data[] = {
 #include "realesrgan_postproc_tta_int8s.spv.hex.h"
 };
+static const uint32_t realesrgan_align_spv_data[] = {
+#include "realesrgan_align.spv.hex.h"
+};
+static const uint32_t realesrgan_align_fp16s_spv_data[] = {
+#include "realesrgan_align_fp16s.spv.hex.h"
+};
 
 static void print_ncnn_load_error(const char *stage, int code)
 {
@@ -246,7 +252,9 @@ RealESRGAN::RealESRGAN(int gpuid, bool _tta_mode, bool _fp32_mode)
     bicubic_2x = 0;
     bicubic_3x = 0;
     bicubic_4x = 0;
+    realesrgan_align = 0;
     tta_mode = _tta_mode;
+    input_alignment = 1;
 }
 
 RealESRGAN::~RealESRGAN()
@@ -255,6 +263,7 @@ RealESRGAN::~RealESRGAN()
     {
         delete realesrgan_preproc;
         delete realesrgan_postproc;
+        delete realesrgan_align;
     }
 
     if (bicubic_2x)
@@ -385,6 +394,17 @@ int RealESRGAN::load(const std::string &parampath, const std::string &modelpath)
 
         if (tta_mode)
         {
+            realesrgan_align = new ncnn::Pipeline(net.vulkan_device());
+            realesrgan_align->set_optimal_local_size_xyz(32, 32, 3);
+            int align_ret = net.opt.use_fp16_storage
+                ? realesrgan_align->create(realesrgan_align_fp16s_spv_data, sizeof(realesrgan_align_fp16s_spv_data), specializations)
+                : realesrgan_align->create(realesrgan_align_spv_data, sizeof(realesrgan_align_spv_data), specializations);
+            if (align_ret != 0)
+            {
+                fprintf(stderr, "🚨 Error: Failed to create input alignment pipeline (tta), code=%d\n", align_ret);
+                return align_ret;
+            }
+
             if (net.opt.use_fp16_storage && net.opt.use_int8_storage)
             {
                 int ret = realesrgan_preproc->create(realesrgan_preproc_tta_int8s_spv_data, sizeof(realesrgan_preproc_tta_int8s_spv_data), specializations);
@@ -551,6 +571,16 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
 
     const int TILE_SIZE_X = tilesize;
     const int TILE_SIZE_Y = tilesize;
+    if (input_alignment < 1 || input_alignment > 4096)
+    {
+        fprintf(stderr, "🚨 Error: Input alignment must be between 1 and 4096 (received %d)\n", input_alignment);
+        return -1;
+    }
+
+    const auto get_alignment_padding = [this](int size)
+    {
+        return (input_alignment - size % input_alignment) % input_alignment;
+    };
 
     ncnn::VkAllocator *blob_vkallocator = net.vulkan_device()->acquire_blob_allocator();
     ncnn::VkAllocator *staging_vkallocator = net.vulkan_device()->acquire_staging_allocator();
@@ -581,10 +611,11 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
         const int tile_y_end = std::min((yi + 1) * TILE_SIZE_Y, h);
         const int tile_h_nopad = tile_y_end - tile_y_start;
         const int pad_top = std::min(prepadding, tile_y_start);
-        const int pad_bottom = std::min(prepadding, h - tile_y_end);
+        const int pad_bottom_context = std::min(prepadding, h - tile_y_end);
+        const int pad_bottom = pad_bottom_context + (tta_mode ? 0 : get_alignment_padding(tile_h_nopad + pad_top + pad_bottom_context));
 
         int in_tile_y0 = tile_y_start - pad_top;
-        int in_tile_y1 = tile_y_end + pad_bottom;
+        int in_tile_y1 = std::min(tile_y_end + pad_bottom, h);
 
         ncnn::Mat in;
         if (opt.use_fp16_storage && opt.use_int8_storage)
@@ -644,7 +675,8 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
             const int tile_x_end = std::min((xi + 1) * TILE_SIZE_X, w);
             const int tile_w_nopad = tile_x_end - tile_x_start;
             const int pad_left = std::min(prepadding, tile_x_start);
-            const int pad_right = std::min(prepadding, w - tile_x_end);
+            const int pad_right_context = std::min(prepadding, w - tile_x_end);
+            const int pad_right = pad_right_context + (tta_mode ? 0 : get_alignment_padding(tile_w_nopad + pad_left + pad_right_context));
 
             if (tta_mode)
             {
@@ -707,6 +739,41 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                     cmd.record_pipeline(realesrgan_preproc, bindings, constants, dispatcher);
                 }
 
+                ncnn::VkMat aligned_input_gpu[8];
+                for (int ti = 0; ti < 8; ti++)
+                {
+                    const ncnn::VkMat &raw_input = in_tile_gpu[ti];
+                    const int aligned_w = raw_input.w + get_alignment_padding(raw_input.w);
+                    const int aligned_h = raw_input.h + get_alignment_padding(raw_input.h);
+                    if (aligned_w == raw_input.w && aligned_h == raw_input.h)
+                    {
+                        aligned_input_gpu[ti] = raw_input;
+                        continue;
+                    }
+
+                    aligned_input_gpu[ti].create(aligned_w, aligned_h, raw_input.c, in_out_tile_elemsize, raw_input.elempack, blob_vkallocator);
+
+                    std::vector<ncnn::VkMat> align_bindings(2);
+                    align_bindings[0] = raw_input;
+                    align_bindings[1] = aligned_input_gpu[ti];
+
+                    std::vector<ncnn::vk_constant_type> align_constants(7);
+                    align_constants[0].i = raw_input.w;
+                    align_constants[1].i = raw_input.h;
+                    align_constants[2].i = raw_input.cstep;
+                    align_constants[3].i = aligned_w;
+                    align_constants[4].i = aligned_h;
+                    align_constants[5].i = aligned_input_gpu[ti].cstep;
+                    align_constants[6].i = raw_input.c;
+
+                    ncnn::VkMat align_dispatcher;
+                    align_dispatcher.w = aligned_w;
+                    align_dispatcher.h = aligned_h;
+                    align_dispatcher.c = raw_input.c;
+
+                    cmd.record_pipeline(realesrgan_align, align_bindings, align_constants, align_dispatcher);
+                }
+
                 // realesrgan
                 ncnn::VkMat out_tile_gpu[8];
                 for (int ti = 0; ti < 8; ti++)
@@ -717,7 +784,7 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                     ex.set_workspace_vkallocator(blob_vkallocator);
                     ex.set_staging_vkallocator(staging_vkallocator);
 
-                    int ret = ex.input(input_blob_name.c_str(), in_tile_gpu[ti]);
+                    int ret = ex.input(input_blob_name.c_str(), aligned_input_gpu[ti]);
                     if (ret != 0)
                     {
                         fprintf(stderr, "🚨 Error: ex.input failed (blob=%s, code=%d)\n", input_blob_name.c_str(), ret);
@@ -778,9 +845,9 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                     bindings[8] = out_alpha_tile_gpu;
                     bindings[9] = out_gpu;
 
-                    std::vector<ncnn::vk_constant_type> constants(13);
-                    constants[0].i = out_tile_gpu[0].w;
-                    constants[1].i = out_tile_gpu[0].h;
+                    std::vector<ncnn::vk_constant_type> constants(15);
+                    constants[0].i = in_tile_gpu[0].w * scale;
+                    constants[1].i = in_tile_gpu[0].h * scale;
                     constants[2].i = out_tile_gpu[0].cstep;
                     constants[3].i = out_gpu.w;
                     constants[4].i = out_gpu.h;
@@ -792,6 +859,8 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                     constants[10].i = channels;
                     constants[11].i = out_alpha_tile_gpu.w;
                     constants[12].i = out_alpha_tile_gpu.h;
+                    constants[13].i = out_tile_gpu[0].w;
+                    constants[14].i = out_tile_gpu[4].w;
 
                     ncnn::VkMat dispatcher;
                     dispatcher.w = std::min(TILE_SIZE_X * scale, out_gpu.w - xi * TILE_SIZE_X * scale);

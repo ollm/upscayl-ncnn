@@ -29,6 +29,7 @@ public:
     int scale;
     int tilesize;
     int prepadding;
+    int input_alignment;
 
 private:
     ncnn::Net net;
@@ -36,6 +37,7 @@ private:
     std::string output_blob_name;
     ncnn::Pipeline *realesrgan_preproc;
     ncnn::Pipeline *realesrgan_postproc;
+    ncnn::Pipeline *realesrgan_align;
     ncnn::Layer *bicubic_2x;
     ncnn::Layer *bicubic_3x;
     ncnn::Layer *bicubic_4x;
