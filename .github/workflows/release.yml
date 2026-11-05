@@ -42,8 +42,8 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Apply ncnn Vulkan Mish patch
-        run: git -C src/ncnn apply "$GITHUB_WORKSPACE/ncnn-vulkan-mish.patch"
+      # - name: Apply ncnn Vulkan Mish patch
+      #   run: git -C src/ncnn apply "$GITHUB_WORKSPACE/ncnn-vulkan-mish.patch"
 
       - name: Vulkan SDK
         run: |
@@ -84,8 +84,8 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Apply ncnn Vulkan Mish patch
-        run: git -C src/ncnn apply "$GITHUB_WORKSPACE/ncnn-vulkan-mish.patch"
+      # - name: Apply ncnn Vulkan Mish patch
+      #   run: git -C src/ncnn apply "$GITHUB_WORKSPACE/ncnn-vulkan-mish.patch"
 
       - name: Vulkan SDK
         run: |
@@ -124,8 +124,8 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Apply ncnn Vulkan Mish patch
-        run: git -C src/ncnn apply "$GITHUB_WORKSPACE/ncnn-vulkan-mish.patch"
+      # - name: Apply ncnn Vulkan Mish patch
+      #   run: git -C src/ncnn apply "$GITHUB_WORKSPACE/ncnn-vulkan-mish.patch"
 
       - name: Dependencies
         run: brew install libomp glslang
@@ -168,8 +168,8 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Apply ncnn Vulkan Mish patch
-        run: git -C src/ncnn apply "$GITHUB_WORKSPACE/ncnn-vulkan-mish.patch"
+      # - name: Apply ncnn Vulkan Mish patch
+      #    run: git -C src/ncnn apply "$GITHUB_WORKSPACE/ncnn-vulkan-mish.patch"
 
       - name: Dependencies
         run: brew install libomp glslang
@@ -242,8 +242,8 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Apply ncnn Vulkan Mish patch
-        run: git -C src/ncnn apply "$env:GITHUB_WORKSPACE\ncnn-vulkan-mish.patch"
+      # - name: Apply ncnn Vulkan Mish patch
+      #   run: git -C src/ncnn apply "$env:GITHUB_WORKSPACE\ncnn-vulkan-mish.patch"
 
       - name: Vulkan SDK
         run: |
@@ -279,8 +279,8 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Apply ncnn Vulkan Mish patch
-        run: git -C src/ncnn apply "$env:GITHUB_WORKSPACE\ncnn-vulkan-mish.patch"
+      # - name: Apply ncnn Vulkan Mish patch
+      #   run: git -C src/ncnn apply "$env:GITHUB_WORKSPACE\ncnn-vulkan-mish.patch"
 
       - name: Vulkan SDK
         run: |
