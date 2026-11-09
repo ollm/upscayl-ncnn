@@ -10,6 +10,9 @@
 #include <filesystem>
 #include <string>
 #include <cmath>
+#include <cwchar>
+#include <cerrno>
+#include <utility>
 #if _WIN32
 #include <locale>
 #include <codecvt>
@@ -47,32 +50,116 @@ static const char *resizemodes[] = {
     "pointsample"   // STBIR_FILTER_POINT_SAMPLE
 };
 
-static int floor_power_of_two(int v)
+using ModelMemoryProfile = std::vector<std::pair<int, float>>;
+
+static long parse_profile_integer(const char *value, char **end)
 {
-    if (v <= 1)
-        return 1;
-
-    int p = 1;
-    while ((p << 1) > 0 && (p << 1) <= v)
-    {
-        p <<= 1;
-    }
-
-    return p;
+    return strtol(value, end, 10);
 }
 
-static int estimate_tilesize_from_model_mem128(uint32_t heap_budget_mb, float model_mem_128_mb, float safety_percent, int max_tile_size)
+static long parse_profile_integer(const wchar_t *value, wchar_t **end)
 {
-    if (model_mem_128_mb <= 0.f)
+    return wcstol(value, end, 10);
+}
+
+static float parse_profile_memory(const char *value, char **end)
+{
+    return strtof(value, end);
+}
+
+static float parse_profile_memory(const wchar_t *value, wchar_t **end)
+{
+    return wcstof(value, end);
+}
+
+template <typename CharT>
+static bool parse_model_memory_profile(const std::basic_string<CharT> &value, ModelMemoryProfile &profile)
+{
+    ModelMemoryProfile parsed;
+    size_t start = 0;
+
+    while (start < value.size())
+    {
+        const size_t comma = value.find(static_cast<CharT>(','), start);
+        const size_t end = comma == std::basic_string<CharT>::npos ? value.size() : comma;
+        const size_t colon = value.find(static_cast<CharT>(':'), start);
+        if (colon == std::basic_string<CharT>::npos || colon >= end || colon == start || colon + 1 == end ||
+            value.find(static_cast<CharT>(':'), colon + 1) < end)
+        {
+            return false;
+        }
+
+        const std::basic_string<CharT> tile_text = value.substr(start, colon - start);
+        const std::basic_string<CharT> memory_text = value.substr(colon + 1, end - colon - 1);
+        CharT *tile_end = nullptr;
+        CharT *memory_end = nullptr;
+
+        errno = 0;
+        const long tile = parse_profile_integer(tile_text.c_str(), &tile_end);
+        if (errno == ERANGE || tile_end != tile_text.c_str() + tile_text.size() || tile < 32 || tile > INT_MAX)
+        {
+            return false;
+        }
+
+        errno = 0;
+        const float memory_mb = parse_profile_memory(memory_text.c_str(), &memory_end);
+        if (errno == ERANGE || memory_end != memory_text.c_str() + memory_text.size() ||
+            !std::isfinite(memory_mb) || memory_mb <= 0.f)
+        {
+            return false;
+        }
+
+        parsed.emplace_back(static_cast<int>(tile), memory_mb);
+        if (comma == std::basic_string<CharT>::npos)
+            break;
+        start = comma + 1;
+        if (start == value.size())
+            return false;
+    }
+
+    if (parsed.empty())
+        return false;
+
+    std::sort(parsed.begin(), parsed.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+    for (size_t i = 1; i < parsed.size(); i++)
+    {
+        if (parsed[i - 1].first == parsed[i].first)
+            return false;
+    }
+
+    profile = std::move(parsed);
+    return true;
+}
+
+static int estimate_tilesize_from_model_memory(uint32_t heap_budget_mb, const ModelMemoryProfile &profile, float safety_percent, int max_tile_size, int &anchor_tile, float &anchor_memory_mb)
+{
+    if (profile.empty())
         return 0;
 
-    // Reserve only a percentage of reported budget as a safety margin.
     const double safe_budget_mb = (double)heap_budget_mb * ((double)safety_percent / 100.0);
-    const double ratio = safe_budget_mb / (double)model_mem_128_mb;
-    const double raw_tile = 128.0 * std::sqrt(std::max(0.0, ratio));
+    const std::pair<int, float> *anchor = &profile.front();
+    bool has_fitting_measurement = false;
+    for (const auto &measurement : profile)
+    {
+        if ((double)measurement.second <= safe_budget_mb)
+        {
+            anchor = &measurement;
+            has_fitting_measurement = true;
+        }
+    }
 
-    int tile = floor_power_of_two((int)raw_tile);
+    anchor_tile = anchor->first;
+    anchor_memory_mb = anchor->second;
+
+    const double ratio = safe_budget_mb / (double)anchor->second;
+    const double raw_tile = (double)anchor->first * std::sqrt(std::max(0.0, ratio));
+    const double bounded_tile = std::min(raw_tile, (double)max_tile_size);
+    const int step = bounded_tile < 512.0 ? 64 : 128;
+    int tile = (int)(bounded_tile / step) * step;
+
     tile = std::max(tile, 32);
+    if (has_fitting_measurement)
+        tile = std::max(tile, std::min(anchor->first, max_tile_size));
     tile = std::min(tile, max_tile_size);
 
     return tile;
@@ -255,10 +342,11 @@ static void print_usage()
     fprintf(stderr, "  -j load:proc:save    thread count for load/proc/save (default=1:2:2) can be 1:2,2,2:2 for multi-gpu\n");
     fprintf(stderr, "  -x                   enable tta mode\n");
     fprintf(stderr, "  -p                   force fp32 path (disable fp16/int8 storage)\n");
-    fprintf(stderr, "  -y model-mem128-mb   model memory usage in MB measured at tile=128 for auto tile estimation\n");
+    fprintf(stderr, "  -y model-mem128-mb   legacy model memory usage in MB measured at tile=128 for auto tile estimation\n");
+    fprintf(stderr, "  --model-mem-tiles T:MB,...  measured model memory in MB at each tile size for auto estimation\n");
     fprintf(stderr, "  -u model-mem-safe-pct percentage of heap budget usable for auto tile estimation (default=50)\n");
-    fprintf(stderr, "  -k max-tilesize      maximum auto tile size cap (default=8192)\n");
-    fprintf(stderr, "  --max-tilesize N     maximum auto tile size cap (default=8192)\n");
+    fprintf(stderr, "  -k max-tilesize      maximum auto tile size cap (default=2048)\n");
+    fprintf(stderr, "  --max-tilesize N     maximum auto tile size cap (default=2048)\n");
     fprintf(stderr, "  --diagnose-model     validate model compatibility only (no image processing)\n");
     fprintf(stderr, "  -f format            output image format (jpg/png/webp, default=ext/png)\n");
     fprintf(stderr, "  -v                   verbose output\n");
@@ -1448,9 +1536,9 @@ int main(int argc, char **argv)
     int verbose = 0;
     int tta_mode = 0;
     int fp32_mode = 0;
-    float model_mem_128_mb = 0.f;
+    ModelMemoryProfile model_memory_profile;
     float model_mem_safe_pct = 50.f;
-    int max_tile_size = 8192;
+    int max_tile_size = 2048;
     bool diagnose_model = false;
     int prepadding = 10;
     int input_alignment = 1;
@@ -1522,6 +1610,21 @@ int main(int argc, char **argv)
                 }
                 continue;
             }
+            if (wcscmp(argv[i], L"--model-mem-tiles") == 0)
+            {
+                if (i + 1 >= argc)
+                {
+                    fwprintf(stderr, L"🚨 Error: Missing value for --model-mem-tiles!\n");
+                    return -1;
+                }
+
+                if (!parse_model_memory_profile(std::wstring(argv[++i]), model_memory_profile))
+                {
+                    fwprintf(stderr, L"🚨 Error: Invalid --model-mem-tiles value; expected unique TILE:MB pairs (tile >= 32, memory > 0), e.g. 128:129,512:257.\n");
+                    return -1;
+                }
+                continue;
+            }
 
             argv[new_argc++] = argv[i];
         }
@@ -1589,6 +1692,21 @@ int main(int argc, char **argv)
                 if (max_tile_size < 32)
                 {
                     fprintf(stderr, "🚨 Error: Invalid max tile size, it should be >= 32!\n");
+                    return -1;
+                }
+                continue;
+            }
+            if (strcmp(argv[i], "--model-mem-tiles") == 0)
+            {
+                if (i + 1 >= argc)
+                {
+                    fprintf(stderr, "🚨 Error: Missing value for --model-mem-tiles!\n");
+                    return -1;
+                }
+
+                if (!parse_model_memory_profile(std::string(argv[++i]), model_memory_profile))
+                {
+                    fprintf(stderr, "🚨 Error: Invalid --model-mem-tiles value; expected unique TILE:MB pairs (tile >= 32, memory > 0), e.g. 128:129,512:257.\n");
                     return -1;
                 }
                 continue;
@@ -1694,13 +1812,16 @@ int main(int argc, char **argv)
             fp32_mode = 1;
             break;
         case L'y':
-            model_mem_128_mb = _wtof(optarg);
-            if (model_mem_128_mb <= 0.f)
+        {
+            const float model_mem_128_mb = _wtof(optarg);
+            if (model_mem_128_mb <= 0.f || !std::isfinite(model_mem_128_mb))
             {
                 fwprintf(stderr, L"🚨 Error: Invalid model memory value for -y (must be > 0 MB)!\n");
                 return -1;
             }
+            model_memory_profile.assign(1, std::make_pair(128, model_mem_128_mb));
             break;
+        }
         case L'u':
             model_mem_safe_pct = _wtof(optarg);
             if (model_mem_safe_pct <= 0.f || model_mem_safe_pct > 100.f)
@@ -1818,13 +1939,16 @@ int main(int argc, char **argv)
             fp32_mode = 1;
             break;
         case 'y':
-            model_mem_128_mb = atof(optarg);
-            if (model_mem_128_mb <= 0.f)
+        {
+            const float model_mem_128_mb = (float)atof(optarg);
+            if (model_mem_128_mb <= 0.f || !std::isfinite(model_mem_128_mb))
             {
                 fprintf(stderr, "🚨 Error: Invalid model memory value for -y (must be > 0 MB)!\n");
                 return -1;
             }
+            model_memory_profile.assign(1, std::make_pair(128, model_mem_128_mb));
             break;
+        }
         case 'u':
             model_mem_safe_pct = atof(optarg);
             if (model_mem_safe_pct <= 0.f || model_mem_safe_pct > 100.f)
@@ -2129,13 +2253,15 @@ int main(int argc, char **argv)
 
         uint32_t heap_budget = ncnn::get_gpu_device(gpuid[i])->get_heap_budget();
 
-        if (model_mem_128_mb > 0.f)
+        if (!model_memory_profile.empty())
         {
-            const int estimated_tile = estimate_tilesize_from_model_mem128(heap_budget, model_mem_128_mb, model_mem_safe_pct, max_tile_size);
+            int anchor_tile = 0;
+            float anchor_memory_mb = 0.f;
+            const int estimated_tile = estimate_tilesize_from_model_memory(heap_budget, model_memory_profile, model_mem_safe_pct, max_tile_size, anchor_tile, anchor_memory_mb);
             tilesize[i] = estimated_tile;
             const double safe_budget_mb = (double)heap_budget * ((double)model_mem_safe_pct / 100.0);
-            fprintf(stderr, "🧠 GPU %d heap budget=%u MB, safe budget(%.1f%%)=%.1f MB, model@tile128=%.2f MB, max-tile=%d -> auto tile=%d\n",
-                gpuid[i], heap_budget, model_mem_safe_pct, safe_budget_mb, model_mem_128_mb, max_tile_size, tilesize[i]);
+            fprintf(stderr, "🧠 GPU %d heap budget=%u MB, safe budget(%.1f%%)=%.1f MB, model memory profile=%zu measurements, anchor=%d:%.2f MB, max-tile=%d -> auto tile=%d\n",
+                gpuid[i], heap_budget, model_mem_safe_pct, safe_budget_mb, model_memory_profile.size(), anchor_tile, anchor_memory_mb, max_tile_size, tilesize[i]);
             continue;
         }
 
