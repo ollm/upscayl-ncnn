@@ -342,8 +342,8 @@ static void print_usage()
     fprintf(stderr, "  -j load:proc:save    thread count for load/proc/save (default=1:2:2) can be 1:2,2,2:2 for multi-gpu\n");
     fprintf(stderr, "  -x                   enable tta mode\n");
     fprintf(stderr, "  -p                   force fp32 path (disable fp16/int8 storage)\n");
-    fprintf(stderr, "  -y model-mem128-mb   legacy model memory usage in MB measured at tile=128 for auto tile estimation\n");
-    fprintf(stderr, "  --model-mem-tiles T:MB,...  measured model memory in MB at each tile size for auto estimation\n");
+    fprintf(stderr, "  -y T:MB,...          measured model memory in MB at each tile size for auto tile estimation\n");
+    fprintf(stderr, "  --model-mem-tiles T:MB,...  alias for -y\n");
     fprintf(stderr, "  -u model-mem-safe-pct percentage of heap budget usable for auto tile estimation (default=50)\n");
     fprintf(stderr, "  -k max-tilesize      maximum auto tile size cap (default=2048)\n");
     fprintf(stderr, "  --max-tilesize N     maximum auto tile size cap (default=2048)\n");
@@ -1813,13 +1813,11 @@ int main(int argc, char **argv)
             break;
         case L'y':
         {
-            const float model_mem_128_mb = _wtof(optarg);
-            if (model_mem_128_mb <= 0.f || !std::isfinite(model_mem_128_mb))
+            if (!parse_model_memory_profile(std::wstring(optarg), model_memory_profile))
             {
-                fwprintf(stderr, L"🚨 Error: Invalid model memory value for -y (must be > 0 MB)!\n");
+                fwprintf(stderr, L"🚨 Error: Invalid model memory profile for -y; expected unique TILE:MB pairs (tile >= 32, memory > 0), e.g. 128:129,512:257.\n");
                 return -1;
             }
-            model_memory_profile.assign(1, std::make_pair(128, model_mem_128_mb));
             break;
         }
         case L'u':
@@ -1940,13 +1938,11 @@ int main(int argc, char **argv)
             break;
         case 'y':
         {
-            const float model_mem_128_mb = (float)atof(optarg);
-            if (model_mem_128_mb <= 0.f || !std::isfinite(model_mem_128_mb))
+            if (!parse_model_memory_profile(std::string(optarg), model_memory_profile))
             {
-                fprintf(stderr, "🚨 Error: Invalid model memory value for -y (must be > 0 MB)!\n");
+                fprintf(stderr, "🚨 Error: Invalid model memory profile for -y; expected unique TILE:MB pairs (tile >= 32, memory > 0), e.g. 128:129,512:257.\n");
                 return -1;
             }
-            model_memory_profile.assign(1, std::make_pair(128, model_mem_128_mb));
             break;
         }
         case 'u':
