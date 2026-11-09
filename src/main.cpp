@@ -257,8 +257,8 @@ static void print_usage()
     fprintf(stderr, "  -p                   force fp32 path (disable fp16/int8 storage)\n");
     fprintf(stderr, "  -y model-mem128-mb   model memory usage in MB measured at tile=128 for auto tile estimation\n");
     fprintf(stderr, "  -u model-mem-safe-pct percentage of heap budget usable for auto tile estimation (default=50)\n");
-    fprintf(stderr, "  -k max-tilesize      maximum auto tile size cap (default=1024)\n");
-    fprintf(stderr, "  --max-tilesize N     maximum auto tile size cap (default=1024)\n");
+    fprintf(stderr, "  -k max-tilesize      maximum auto tile size cap (default=8192)\n");
+    fprintf(stderr, "  --max-tilesize N     maximum auto tile size cap (default=8192)\n");
     fprintf(stderr, "  --diagnose-model     validate model compatibility only (no image processing)\n");
     fprintf(stderr, "  -f format            output image format (jpg/png/webp, default=ext/png)\n");
     fprintf(stderr, "  -v                   verbose output\n");
@@ -1450,7 +1450,7 @@ int main(int argc, char **argv)
     int fp32_mode = 0;
     float model_mem_128_mb = 0.f;
     float model_mem_safe_pct = 50.f;
-    int max_tile_size = 1024;
+    int max_tile_size = 8192;
     bool diagnose_model = false;
     int prepadding = 10;
     int input_alignment = 1;
