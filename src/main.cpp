@@ -755,6 +755,9 @@ void scale_output_image(Task &v, const SaveThreadParams *stp)
     if (!hasOutputScale || resizeProvided || hasCustomWidth)
         return;
 
+    if (v.outimage.w == outputWidth && v.outimage.h == outputHeight)
+        return;
+
     int c = v.outimage.elempack;
 
 #if _WIN32
