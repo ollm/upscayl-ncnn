@@ -571,15 +571,19 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
 
     const int TILE_SIZE_X = tilesize;
     const int TILE_SIZE_Y = tilesize;
+    const bool model_native_tile_profile = tile_profile != TileProfile::Generic;
+    const int tile_input_alignment = model_native_tile_profile && input_alignment % 2 != 0
+        ? input_alignment * 2
+        : input_alignment;
     if (input_alignment < 1 || input_alignment > 4096)
     {
         fprintf(stderr, "🚨 Error: Input alignment must be between 1 and 4096 (received %d)\n", input_alignment);
         return -1;
     }
 
-    const auto get_alignment_padding = [this](int size)
+    const auto get_alignment_padding = [tile_input_alignment](int size)
     {
-        return (input_alignment - size % input_alignment) % input_alignment;
+        return (tile_input_alignment - size % tile_input_alignment) % tile_input_alignment;
     };
 
     ncnn::VkAllocator *blob_vkallocator = net.vulkan_device()->acquire_blob_allocator();
@@ -610,11 +614,13 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
         const int tile_y_start = yi * TILE_SIZE_Y;
         const int tile_y_end = std::min((yi + 1) * TILE_SIZE_Y, h);
         const int tile_h_nopad = tile_y_end - tile_y_start;
-        const int pad_top = std::min(prepadding, tile_y_start);
-        const int pad_bottom_context = std::min(prepadding, h - tile_y_end);
+        const int source_pad_top = std::min(prepadding, tile_y_start);
+        const int source_pad_bottom_context = std::min(prepadding, h - tile_y_end);
+        const int pad_top = model_native_tile_profile ? prepadding : source_pad_top;
+        const int pad_bottom_context = model_native_tile_profile ? prepadding : source_pad_bottom_context;
         const int pad_bottom = pad_bottom_context + (tta_mode ? 0 : get_alignment_padding(tile_h_nopad + pad_top + pad_bottom_context));
 
-        int in_tile_y0 = tile_y_start - pad_top;
+        int in_tile_y0 = tile_y_start - source_pad_top;
         int in_tile_y1 = std::min(tile_y_end + pad_bottom, h);
 
         ncnn::Mat in;
@@ -654,6 +660,7 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                 cmd.submit_and_wait();
                 cmd.reset();
             }
+
         }
 
         int out_tile_y0 = std::max(yi * TILE_SIZE_Y, 0);
@@ -674,8 +681,10 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
             const int tile_x_start = xi * TILE_SIZE_X;
             const int tile_x_end = std::min((xi + 1) * TILE_SIZE_X, w);
             const int tile_w_nopad = tile_x_end - tile_x_start;
-            const int pad_left = std::min(prepadding, tile_x_start);
-            const int pad_right_context = std::min(prepadding, w - tile_x_end);
+            const int source_pad_left = std::min(prepadding, tile_x_start);
+            const int source_pad_right_context = std::min(prepadding, w - tile_x_end);
+            const int pad_left = model_native_tile_profile ? prepadding : source_pad_left;
+            const int pad_right_context = model_native_tile_profile ? prepadding : source_pad_right_context;
             const int pad_right = pad_right_context + (tta_mode ? 0 : get_alignment_padding(tile_w_nopad + pad_left + pad_right_context));
 
             if (tta_mode)
@@ -726,7 +735,7 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                     constants[6].i = pad_top;
                     constants[7].i = pad_left;
                     constants[8].i = xi * TILE_SIZE_X;
-                    constants[9].i = pad_top;
+                    constants[9].i = source_pad_top;
                     constants[10].i = channels;
                     constants[11].i = in_alpha_tile_gpu.w;
                     constants[12].i = in_alpha_tile_gpu.h;
@@ -810,6 +819,24 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                     }
                 }
 
+                if (model_native_tile_profile)
+                {
+                    for (int ti = 0; ti < 8; ti++)
+                    {
+                        const bool rotated = ti >= 4;
+                        const int expected_w = (rotated ? tile_h_nopad : tile_w_nopad) * scale;
+                        const int expected_h = (rotated ? tile_w_nopad : tile_h_nopad) * scale;
+                        if (out_tile_gpu[ti].w < expected_w || out_tile_gpu[ti].h < expected_h)
+                        {
+                            fprintf(stderr, "🚨 Error: selected tile profile requires output at least %dx%d, but model produced %dx%d.\n",
+                                    expected_w, expected_h, out_tile_gpu[ti].w, out_tile_gpu[ti].h);
+                            net.vulkan_device()->reclaim_blob_allocator(blob_vkallocator);
+                            net.vulkan_device()->reclaim_staging_allocator(staging_vkallocator);
+                            return -1;
+                        }
+                    }
+                }
+
                 ncnn::VkMat out_alpha_tile_gpu;
                 if (channels == 4)
                 {
@@ -846,16 +873,16 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                     bindings[9] = out_gpu;
 
                     std::vector<ncnn::vk_constant_type> constants(15);
-                    constants[0].i = in_tile_gpu[0].w * scale;
-                    constants[1].i = in_tile_gpu[0].h * scale;
+                    constants[0].i = model_native_tile_profile ? out_tile_gpu[0].w : in_tile_gpu[0].w * scale;
+                    constants[1].i = model_native_tile_profile ? out_tile_gpu[0].h : in_tile_gpu[0].h * scale;
                     constants[2].i = out_tile_gpu[0].cstep;
                     constants[3].i = out_gpu.w;
                     constants[4].i = out_gpu.h;
                     constants[5].i = out_gpu.cstep;
                     constants[6].i = xi * TILE_SIZE_X * scale;
                     constants[7].i = std::min(TILE_SIZE_X * scale, out_gpu.w - xi * TILE_SIZE_X * scale);
-                    constants[8].i = pad_left * scale;
-                    constants[9].i = pad_top * scale;
+                    constants[8].i = model_native_tile_profile ? 0 : pad_left * scale;
+                    constants[9].i = model_native_tile_profile ? 0 : pad_top * scale;
                     constants[10].i = channels;
                     constants[11].i = out_alpha_tile_gpu.w;
                     constants[12].i = out_alpha_tile_gpu.h;
@@ -904,7 +931,7 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                     constants[6].i = pad_top;
                     constants[7].i = pad_left;
                     constants[8].i = xi * TILE_SIZE_X;
-                    constants[9].i = pad_top;
+                    constants[9].i = source_pad_top;
                     constants[10].i = channels;
                     constants[11].i = in_alpha_tile_gpu.w;
                     constants[12].i = in_alpha_tile_gpu.h;
@@ -947,6 +974,18 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                     }
                 }
 
+                if (model_native_tile_profile &&
+                    (out_tile_gpu.w < tile_w_nopad * scale || out_tile_gpu.h < tile_h_nopad * scale))
+                {
+                    fprintf(stderr, "🚨 Error: selected tile profile requires output at least %dx%d, but model produced %dx%d.\n",
+                            tile_w_nopad * scale, tile_h_nopad * scale, out_tile_gpu.w, out_tile_gpu.h);
+                    cmd.submit_and_wait();
+                    cmd.reset();
+                    net.vulkan_device()->reclaim_blob_allocator(blob_vkallocator);
+                    net.vulkan_device()->reclaim_staging_allocator(staging_vkallocator);
+                    return -1;
+                }
+
                 ncnn::VkMat out_alpha_tile_gpu;
                 if (channels == 4)
                 {
@@ -984,8 +1023,8 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                     constants[5].i = out_gpu.cstep;
                     constants[6].i = xi * TILE_SIZE_X * scale;
                     constants[7].i = std::min(TILE_SIZE_X * scale, out_gpu.w - xi * TILE_SIZE_X * scale);
-                    constants[8].i = pad_left * scale;
-                    constants[9].i = pad_top * scale;
+                    constants[8].i = model_native_tile_profile ? 0 : pad_left * scale;
+                    constants[9].i = model_native_tile_profile ? 0 : pad_top * scale;
                     constants[10].i = channels;
                     constants[11].i = out_alpha_tile_gpu.w;
                     constants[12].i = out_alpha_tile_gpu.h;

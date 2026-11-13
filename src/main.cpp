@@ -337,6 +337,7 @@ static void print_usage()
     fprintf(stderr, "  -m model-path        folder path to the pre-trained models. default=models\n");
     fprintf(stderr, "  -n model-name        model name (default=realesrgan-x4plus, can be realesr-animevideov3 | realesrgan-x4plus-anime | realesrnet-x4plus or any other model)\n");
     fprintf(stderr, "  -P N, --prepadding N model prepadding in pixels (default=10, 0=disabled)\n");
+    fprintf(stderr, "  --tile-profile NAME  tile handling: generic (default), realcugan-x2, waifu2x-upconv7-x2\n");
     fprintf(stderr, "  -A N, --input-alignment N pad model inputs to a multiple of N (1..4096, default=1)\n");
     fprintf(stderr, "  -g gpu-id            gpu device to use (default=auto) can be 0,1,2 for multi-gpu\n");
     fprintf(stderr, "  -j load:proc:save    thread count for load/proc/save (default=1:2:2) can be 1:2,2,2:2 for multi-gpu\n");
@@ -383,6 +384,7 @@ static void print_daemon_help()
     fprintf(stderr, "  -c compress          compression of the output image, default 0 and varies to 100\n");
     fprintf(stderr, "  -t tile-size         tile size (>=32/0=auto, default=0) can be 0,0,0 for multi-gpu\n");
     fprintf(stderr, "  -P N, --prepadding N model prepadding in pixels (default=10, 0=disabled; set when starting daemon)\n");
+    fprintf(stderr, "  --tile-profile NAME  tile handling: generic, realcugan-x2, waifu2x-upconv7-x2 (set at daemon startup)\n");
     fprintf(stderr, "  -j load:proc:save    thread count for load/proc/save (default=1:2:2) can be 1:2,2,2:2 for multi-gpu\n");
     fprintf(stderr, "  -x                   enable tta mode\n");
     fprintf(stderr, "  -p                   force fp32 path (disable fp16/int8 storage)\n");
@@ -929,6 +931,7 @@ struct ProcessParams
     int tta_mode;
     int fp32_mode;
     int prepadding;
+    TileProfile tile_profile;
     int input_alignment;
     path_t format;
 };
@@ -940,7 +943,7 @@ static ProcessParams create_process_params(
     const std::vector<int> &tilesize, const path_t &model,
     const path_t &modelname, const std::vector<int> &gpuid,
     int jobs_load, const std::vector<int> &jobs_proc, int jobs_save,
-    int verbose, int tta_mode, int fp32_mode, int prepadding, int input_alignment, const path_t &format)
+    int verbose, int tta_mode, int fp32_mode, int prepadding, TileProfile tile_profile, int input_alignment, const path_t &format)
 {
     ProcessParams params;
     params.scale = scale;
@@ -963,6 +966,7 @@ static ProcessParams create_process_params(
     params.tta_mode = tta_mode;
     params.fp32_mode = fp32_mode;
     params.prepadding = prepadding;
+    params.tile_profile = tile_profile;
     params.input_alignment = input_alignment;
     params.format = format;
     return params;
@@ -1237,6 +1241,7 @@ static int run_daemon_mode(ProcessParams &params)
         realesrgan[i]->scale = params.scale;
         realesrgan[i]->tilesize = params.tilesize[i];
         realesrgan[i]->prepadding = prepadding;
+        realesrgan[i]->tile_profile = params.tile_profile;
         realesrgan[i]->input_alignment = params.input_alignment;
     }
     fprintf(stderr, "✅ Model loaded successfully!\n");
@@ -1542,6 +1547,8 @@ int main(int argc, char **argv)
     int max_tile_size = 2048;
     bool diagnose_model = false;
     int prepadding = 10;
+    bool prepaddingProvided = false;
+    TileProfile tile_profile = TileProfile::Generic;
     int input_alignment = 1;
     path_t format = PATHSTR("png");
     bool daemon_mode = false;
@@ -1555,6 +1562,28 @@ int main(int argc, char **argv)
             if (wcscmp(argv[i], L"--diagnose-model") == 0)
             {
                 diagnose_model = true;
+                continue;
+            }
+            if (wcscmp(argv[i], L"--tile-profile") == 0)
+            {
+                if (i + 1 >= argc)
+                {
+                    fwprintf(stderr, L"🚨 Error: Missing value for --tile-profile!\n");
+                    return -1;
+                }
+
+                const wchar_t *value = argv[++i];
+                if (wcscmp(value, L"generic") == 0)
+                    tile_profile = TileProfile::Generic;
+                else if (wcscmp(value, L"realcugan-x2") == 0)
+                    tile_profile = TileProfile::RealCuganX2;
+                else if (wcscmp(value, L"waifu2x-upconv7-x2") == 0)
+                    tile_profile = TileProfile::Waifu2xUpconv7X2;
+                else
+                {
+                    fwprintf(stderr, L"🚨 Error: Invalid --tile-profile value; expected generic, realcugan-x2, or waifu2x-upconv7-x2.\n");
+                    return -1;
+                }
                 continue;
             }
             if (wcscmp(argv[i], L"--prepadding") == 0 || wcscmp(argv[i], L"-P") == 0)
@@ -1574,6 +1603,7 @@ int main(int argc, char **argv)
                 }
 
                 prepadding = static_cast<int>(value);
+                prepaddingProvided = true;
                 continue;
             }
             if (wcscmp(argv[i], L"--input-alignment") == 0 || wcscmp(argv[i], L"-A") == 0)
@@ -1643,6 +1673,28 @@ int main(int argc, char **argv)
                 diagnose_model = true;
                 continue;
             }
+            if (strcmp(argv[i], "--tile-profile") == 0)
+            {
+                if (i + 1 >= argc)
+                {
+                    fprintf(stderr, "🚨 Error: Missing value for --tile-profile!\n");
+                    return -1;
+                }
+
+                const char *value = argv[++i];
+                if (strcmp(value, "generic") == 0)
+                    tile_profile = TileProfile::Generic;
+                else if (strcmp(value, "realcugan-x2") == 0)
+                    tile_profile = TileProfile::RealCuganX2;
+                else if (strcmp(value, "waifu2x-upconv7-x2") == 0)
+                    tile_profile = TileProfile::Waifu2xUpconv7X2;
+                else
+                {
+                    fprintf(stderr, "🚨 Error: Invalid --tile-profile value; expected generic, realcugan-x2, or waifu2x-upconv7-x2.\n");
+                    return -1;
+                }
+                continue;
+            }
             if (strcmp(argv[i], "--prepadding") == 0 || strcmp(argv[i], "-P") == 0)
             {
                 if (i + 1 >= argc)
@@ -1660,6 +1712,7 @@ int main(int argc, char **argv)
                 }
 
                 prepadding = static_cast<int>(value);
+                prepaddingProvided = true;
                 continue;
             }
             if (strcmp(argv[i], "--input-alignment") == 0 || strcmp(argv[i], "-A") == 0)
@@ -1975,6 +2028,12 @@ int main(int argc, char **argv)
     }
 #endif // _WIN32
 
+    if (tile_profile != TileProfile::Generic && prepaddingProvided)
+    {
+        fprintf(stderr, "🚨 Error: --tile-profile defines its own model padding; do not combine it with -P/--prepadding.\n");
+        return -1;
+    }
+
     if (fp32_mode)
     {
         fprintf(stderr, "⚙️ FP32 mode enabled (-p): fp16/int8 storage disabled\n");
@@ -2168,6 +2227,27 @@ int main(int argc, char **argv)
         fprintf(stderr, "✨ Using the default scale x4\n");
     }
 
+    if (tile_profile == TileProfile::RealCuganX2)
+    {
+        if (scale != 2)
+        {
+            fprintf(stderr, "🚨 Error: --tile-profile realcugan-x2 requires model scale x2.\n");
+            return -1;
+        }
+        prepadding = 18;
+        fprintf(stderr, "🧩 Using tile profile realcugan-x2 (18 px model context)\n");
+    }
+    else if (tile_profile == TileProfile::Waifu2xUpconv7X2)
+    {
+        if (scale != 2)
+        {
+            fprintf(stderr, "🚨 Error: --tile-profile waifu2x-upconv7-x2 requires model scale x2.\n");
+            return -1;
+        }
+        prepadding = 7;
+        fprintf(stderr, "🧩 Using tile profile waifu2x-upconv7-x2 (7 px model context)\n");
+    }
+
 #if _WIN32
     wchar_t parampath[256];
     wchar_t modelpath[256];
@@ -2326,6 +2406,7 @@ int main(int argc, char **argv)
             diagnostic.scale = scale;
             diagnostic.tilesize = tilesize[i];
             diagnostic.prepadding = prepadding;
+            diagnostic.tile_profile = tile_profile;
             diagnostic.input_alignment = input_alignment;
 
             // Runtime dry-run to catch extract/backend incompatibilities that load() alone cannot detect.
@@ -2377,7 +2458,7 @@ int main(int argc, char **argv)
             outputScale, hasOutputScale, compression,
             resizeProvided, hasCustomWidth, tilesize, model,
             modelname, gpuid, jobs_load, jobs_proc, jobs_save,
-            verbose, tta_mode, fp32_mode, prepadding, input_alignment, format);
+            verbose, tta_mode, fp32_mode, prepadding, tile_profile, input_alignment, format);
 
         int result = run_daemon_mode(params);
         
@@ -2393,7 +2474,7 @@ int main(int argc, char **argv)
             outputScale, hasOutputScale, compression,
             resizeProvided, hasCustomWidth, tilesize, model,
             modelname, gpuid, jobs_load, jobs_proc, jobs_save,
-            verbose, tta_mode, fp32_mode, prepadding, input_alignment, format);
+            verbose, tta_mode, fp32_mode, prepadding, tile_profile, input_alignment, format);
 
         std::vector<RealESRGAN *> realesrgan(use_gpu_count);
 
@@ -2421,6 +2502,7 @@ int main(int argc, char **argv)
             realesrgan[i]->scale = scale;
             realesrgan[i]->tilesize = tilesize[i];
             realesrgan[i]->prepadding = prepadding;
+            realesrgan[i]->tile_profile = tile_profile;
             realesrgan[i]->input_alignment = input_alignment;
         }
 

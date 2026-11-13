@@ -10,6 +10,13 @@
 #include "gpu.h"
 #include "layer.h"
 
+enum class TileProfile
+{
+    Generic,
+    RealCuganX2,
+    Waifu2xUpconv7X2
+};
+
 class RealESRGAN
 {
 public:
@@ -30,6 +37,7 @@ public:
     int tilesize;
     int prepadding;
     int input_alignment;
+    TileProfile tile_profile = TileProfile::Generic;
 
 private:
     ncnn::Net net;
