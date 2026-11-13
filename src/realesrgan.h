@@ -14,6 +14,8 @@ enum class TileProfile
 {
     Generic,
     RealCuganX2,
+    RealCuganX3,
+    RealCuganX4,
     Waifu2xUpconv7X2
 };
 
@@ -45,6 +47,7 @@ private:
     std::string output_blob_name;
     ncnn::Pipeline *realesrgan_preproc;
     ncnn::Pipeline *realesrgan_postproc;
+    ncnn::Pipeline *realesrgan_4x_postproc;
     ncnn::Pipeline *realesrgan_align;
     ncnn::Layer *bicubic_2x;
     ncnn::Layer *bicubic_3x;

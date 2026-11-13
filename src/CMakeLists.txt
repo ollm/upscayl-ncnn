@@ -212,6 +212,8 @@ set(SHADER_SPV_HEX_FILES)
 
 compile_shader(realesrgan_preproc.comp)
 compile_shader(realesrgan_postproc.comp)
+compile_shader(realesrgan_4x_postproc.comp)
+compile_shader(realesrgan_4x_postproc_tta.comp)
 compile_shader(realesrgan_preproc_tta.comp)
 compile_shader(realesrgan_postproc_tta.comp)
 compile_shader(realesrgan_align.comp)

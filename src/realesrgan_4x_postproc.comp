@@ -1,0 +1,94 @@
+#version 450
+
+#if NCNN_fp16_storage
+#extension GL_EXT_shader_16bit_storage: require
+#define sfp float16_t
+#else
+#define sfp float
+#endif
+
+#if NCNN_int8_storage
+#extension GL_EXT_shader_8bit_storage: require
+#endif
+
+layout (constant_id = 0) const int bgr = 0;
+
+#if NCNN_int8_storage
+layout (binding = 0) readonly buffer image_blob { uint8_t image_blob_data[]; };
+#else
+layout (binding = 0) readonly buffer image_blob { float image_blob_data[]; };
+#endif
+layout (binding = 1) readonly buffer bottom_blob { sfp bottom_blob_data[]; };
+layout (binding = 2) readonly buffer alpha_blob { sfp alpha_blob_data[]; };
+#if NCNN_int8_storage
+layout (binding = 3) writeonly buffer top_blob { uint8_t top_blob_data[]; };
+#else
+layout (binding = 3) writeonly buffer top_blob { float top_blob_data[]; };
+#endif
+
+layout (push_constant) uniform parameter
+{
+    int imw;
+    int imh;
+    int imcstep;
+    int w;
+    int h;
+    int cstep;
+    int outw;
+    int outh;
+    int outcstep;
+    int crop_x;
+    int crop_y;
+    int offset_x;
+    int gx_max;
+    int channels;
+    int alphaw;
+    int alphah;
+} p;
+
+void main()
+{
+    int gx = int(gl_GlobalInvocationID.x);
+    int gy = int(gl_GlobalInvocationID.y);
+    int gz = int(gl_GlobalInvocationID.z);
+
+    if (gx >= p.gx_max || gy >= p.outh || gz >= p.channels)
+        return;
+
+    int imx = clamp(gx / 4 + p.crop_x, 0, p.imw - 1);
+    int imy = clamp(gy / 4 + p.crop_y, 0, p.imh - 1);
+
+#if NCNN_int8_storage
+    int image_offset = imy * p.imw + imx;
+    float v = bgr == 1 && gz != 3
+        ? float(uint(image_blob_data[image_offset * p.channels + 2 - gz]))
+        : float(uint(image_blob_data[image_offset * p.channels + gz]));
+#else
+    int image_offset = gz * p.imcstep + imy * p.imw + imx;
+    float v = image_blob_data[image_offset];
+#endif
+
+    if (gz == 3)
+    {
+        v = float(alpha_blob_data[gy * p.alphaw + gx]);
+    }
+    else
+    {
+        v = v / 255.f + float(bottom_blob_data[gz * p.cstep + gy * p.w + gx]);
+        v = v * 255.f;
+    }
+
+    v += 0.5f;
+
+#if NCNN_int8_storage
+    int output_offset = (gy * p.outw + gx + p.offset_x) * p.channels;
+    uint v8 = clamp(uint(floor(v)), 0, 255);
+    if (bgr == 1 && gz != 3)
+        top_blob_data[output_offset + 2 - gz] = uint8_t(v8);
+    else
+        top_blob_data[output_offset + gz] = uint8_t(v8);
+#else
+    int output_offset = gz * p.outcstep + gy * p.outw + gx + p.offset_x;
+    top_blob_data[output_offset] = v;
+#endif
+}

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdio>
+#include <numeric>
 #include <vector>
 
 static const uint32_t realesrgan_preproc_spv_data[] = {
@@ -25,6 +26,15 @@ static const uint32_t realesrgan_postproc_fp16s_spv_data[] = {
 static const uint32_t realesrgan_postproc_int8s_spv_data[] = {
 #include "realesrgan_postproc_int8s.spv.hex.h"
 };
+static const uint32_t realesrgan_4x_postproc_spv_data[] = {
+#include "realesrgan_4x_postproc.spv.hex.h"
+};
+static const uint32_t realesrgan_4x_postproc_fp16s_spv_data[] = {
+#include "realesrgan_4x_postproc_fp16s.spv.hex.h"
+};
+static const uint32_t realesrgan_4x_postproc_int8s_spv_data[] = {
+#include "realesrgan_4x_postproc_int8s.spv.hex.h"
+};
 
 static const uint32_t realesrgan_preproc_tta_spv_data[] = {
 #include "realesrgan_preproc_tta.spv.hex.h"
@@ -43,6 +53,15 @@ static const uint32_t realesrgan_postproc_tta_fp16s_spv_data[] = {
 };
 static const uint32_t realesrgan_postproc_tta_int8s_spv_data[] = {
 #include "realesrgan_postproc_tta_int8s.spv.hex.h"
+};
+static const uint32_t realesrgan_4x_postproc_tta_spv_data[] = {
+#include "realesrgan_4x_postproc_tta.spv.hex.h"
+};
+static const uint32_t realesrgan_4x_postproc_tta_fp16s_spv_data[] = {
+#include "realesrgan_4x_postproc_tta_fp16s.spv.hex.h"
+};
+static const uint32_t realesrgan_4x_postproc_tta_int8s_spv_data[] = {
+#include "realesrgan_4x_postproc_tta_int8s.spv.hex.h"
 };
 static const uint32_t realesrgan_align_spv_data[] = {
 #include "realesrgan_align.spv.hex.h"
@@ -249,6 +268,7 @@ RealESRGAN::RealESRGAN(int gpuid, bool _tta_mode, bool _fp32_mode)
 
     realesrgan_preproc = 0;
     realesrgan_postproc = 0;
+    realesrgan_4x_postproc = 0;
     bicubic_2x = 0;
     bicubic_3x = 0;
     bicubic_4x = 0;
@@ -263,6 +283,7 @@ RealESRGAN::~RealESRGAN()
     {
         delete realesrgan_preproc;
         delete realesrgan_postproc;
+        delete realesrgan_4x_postproc;
         delete realesrgan_align;
     }
 
@@ -391,6 +412,8 @@ int RealESRGAN::load(const std::string &parampath, const std::string &modelpath)
 
         realesrgan_postproc = new ncnn::Pipeline(net.vulkan_device());
         realesrgan_postproc->set_optimal_local_size_xyz(32, 32, 3);
+        realesrgan_4x_postproc = new ncnn::Pipeline(net.vulkan_device());
+        realesrgan_4x_postproc->set_optimal_local_size_xyz(32, 32, 3);
 
         if (tta_mode)
         {
@@ -460,6 +483,30 @@ int RealESRGAN::load(const std::string &parampath, const std::string &modelpath)
                     return ret;
                 }
             }
+
+            const uint32_t *shader_data = nullptr;
+            size_t shader_size = 0;
+            if (net.opt.use_fp16_storage && net.opt.use_int8_storage)
+            {
+                shader_data = realesrgan_4x_postproc_tta_int8s_spv_data;
+                shader_size = sizeof(realesrgan_4x_postproc_tta_int8s_spv_data);
+            }
+            else if (net.opt.use_fp16_storage)
+            {
+                shader_data = realesrgan_4x_postproc_tta_fp16s_spv_data;
+                shader_size = sizeof(realesrgan_4x_postproc_tta_fp16s_spv_data);
+            }
+            else
+            {
+                shader_data = realesrgan_4x_postproc_tta_spv_data;
+                shader_size = sizeof(realesrgan_4x_postproc_tta_spv_data);
+            }
+            int ret = realesrgan_4x_postproc->create(shader_data, shader_size, specializations);
+            if (ret != 0)
+            {
+                fprintf(stderr, "🚨 Error: Failed to create RealCUGAN x4 postproc pipeline (tta), code=%d\n", ret);
+                return ret;
+            }
         }
         else
         {
@@ -518,6 +565,30 @@ int RealESRGAN::load(const std::string &parampath, const std::string &modelpath)
                     return ret;
                 }
             }
+
+            const uint32_t *shader_data = nullptr;
+            size_t shader_size = 0;
+            if (net.opt.use_fp16_storage && net.opt.use_int8_storage)
+            {
+                shader_data = realesrgan_4x_postproc_int8s_spv_data;
+                shader_size = sizeof(realesrgan_4x_postproc_int8s_spv_data);
+            }
+            else if (net.opt.use_fp16_storage)
+            {
+                shader_data = realesrgan_4x_postproc_fp16s_spv_data;
+                shader_size = sizeof(realesrgan_4x_postproc_fp16s_spv_data);
+            }
+            else
+            {
+                shader_data = realesrgan_4x_postproc_spv_data;
+                shader_size = sizeof(realesrgan_4x_postproc_spv_data);
+            }
+            int ret = realesrgan_4x_postproc->create(shader_data, shader_size, specializations);
+            if (ret != 0)
+            {
+                fprintf(stderr, "🚨 Error: Failed to create RealCUGAN x4 postproc pipeline, code=%d\n", ret);
+                return ret;
+            }
         }
     }
 
@@ -572,14 +643,13 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
     const int TILE_SIZE_X = tilesize;
     const int TILE_SIZE_Y = tilesize;
     const bool model_native_tile_profile = tile_profile != TileProfile::Generic;
-    const int tile_input_alignment = model_native_tile_profile && input_alignment % 2 != 0
-        ? input_alignment * 2
-        : input_alignment;
     if (input_alignment < 1 || input_alignment > 4096)
     {
         fprintf(stderr, "🚨 Error: Input alignment must be between 1 and 4096 (received %d)\n", input_alignment);
         return -1;
     }
+    const int model_input_alignment = tile_profile == TileProfile::RealCuganX3 ? 4 : (model_native_tile_profile ? 2 : 1);
+    const int tile_input_alignment = std::lcm(input_alignment, model_input_alignment);
 
     const auto get_alignment_padding = [tile_input_alignment](int size)
     {
@@ -860,41 +930,78 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
 
                 // postproc
                 {
-                    std::vector<ncnn::VkMat> bindings(10);
-                    bindings[0] = out_tile_gpu[0];
-                    bindings[1] = out_tile_gpu[1];
-                    bindings[2] = out_tile_gpu[2];
-                    bindings[3] = out_tile_gpu[3];
-                    bindings[4] = out_tile_gpu[4];
-                    bindings[5] = out_tile_gpu[5];
-                    bindings[6] = out_tile_gpu[6];
-                    bindings[7] = out_tile_gpu[7];
-                    bindings[8] = out_alpha_tile_gpu;
-                    bindings[9] = out_gpu;
+                    if (tile_profile == TileProfile::RealCuganX4)
+                    {
+                        std::vector<ncnn::VkMat> bindings(11);
+                        bindings[0] = in_gpu;
+                        for (int ti = 0; ti < 8; ti++)
+                            bindings[ti + 1] = out_tile_gpu[ti];
+                        bindings[9] = out_alpha_tile_gpu;
+                        bindings[10] = out_gpu;
 
-                    std::vector<ncnn::vk_constant_type> constants(15);
-                    constants[0].i = model_native_tile_profile ? out_tile_gpu[0].w : in_tile_gpu[0].w * scale;
-                    constants[1].i = model_native_tile_profile ? out_tile_gpu[0].h : in_tile_gpu[0].h * scale;
-                    constants[2].i = out_tile_gpu[0].cstep;
-                    constants[3].i = out_gpu.w;
-                    constants[4].i = out_gpu.h;
-                    constants[5].i = out_gpu.cstep;
-                    constants[6].i = xi * TILE_SIZE_X * scale;
-                    constants[7].i = std::min(TILE_SIZE_X * scale, out_gpu.w - xi * TILE_SIZE_X * scale);
-                    constants[8].i = model_native_tile_profile ? 0 : pad_left * scale;
-                    constants[9].i = model_native_tile_profile ? 0 : pad_top * scale;
-                    constants[10].i = channels;
-                    constants[11].i = out_alpha_tile_gpu.w;
-                    constants[12].i = out_alpha_tile_gpu.h;
-                    constants[13].i = out_tile_gpu[0].w;
-                    constants[14].i = out_tile_gpu[4].w;
+                        std::vector<ncnn::vk_constant_type> constants(16);
+                        constants[0].i = in_gpu.w;
+                        constants[1].i = in_gpu.h;
+                        constants[2].i = in_gpu.cstep;
+                        constants[3].i = out_tile_gpu[0].w;
+                        constants[4].i = out_tile_gpu[0].h;
+                        constants[5].i = out_tile_gpu[0].cstep;
+                        constants[6].i = out_gpu.w;
+                        constants[7].i = out_gpu.h;
+                        constants[8].i = out_gpu.cstep;
+                        constants[9].i = xi * TILE_SIZE_X;
+                        constants[10].i = source_pad_top;
+                        constants[11].i = xi * TILE_SIZE_X * scale;
+                        constants[12].i = std::min(TILE_SIZE_X * scale, out_gpu.w - xi * TILE_SIZE_X * scale);
+                        constants[13].i = channels;
+                        constants[14].i = out_alpha_tile_gpu.w;
+                        constants[15].i = out_alpha_tile_gpu.h;
 
-                    ncnn::VkMat dispatcher;
-                    dispatcher.w = std::min(TILE_SIZE_X * scale, out_gpu.w - xi * TILE_SIZE_X * scale);
-                    dispatcher.h = out_gpu.h;
-                    dispatcher.c = channels;
+                        ncnn::VkMat dispatcher;
+                        dispatcher.w = std::min(TILE_SIZE_X * scale, out_gpu.w - xi * TILE_SIZE_X * scale);
+                        dispatcher.h = out_gpu.h;
+                        dispatcher.c = channels;
 
-                    cmd.record_pipeline(realesrgan_postproc, bindings, constants, dispatcher);
+                        cmd.record_pipeline(realesrgan_4x_postproc, bindings, constants, dispatcher);
+                    }
+                    else
+                    {
+                        std::vector<ncnn::VkMat> bindings(10);
+                        bindings[0] = out_tile_gpu[0];
+                        bindings[1] = out_tile_gpu[1];
+                        bindings[2] = out_tile_gpu[2];
+                        bindings[3] = out_tile_gpu[3];
+                        bindings[4] = out_tile_gpu[4];
+                        bindings[5] = out_tile_gpu[5];
+                        bindings[6] = out_tile_gpu[6];
+                        bindings[7] = out_tile_gpu[7];
+                        bindings[8] = out_alpha_tile_gpu;
+                        bindings[9] = out_gpu;
+
+                        std::vector<ncnn::vk_constant_type> constants(15);
+                        constants[0].i = model_native_tile_profile ? out_tile_gpu[0].w : in_tile_gpu[0].w * scale;
+                        constants[1].i = model_native_tile_profile ? out_tile_gpu[0].h : in_tile_gpu[0].h * scale;
+                        constants[2].i = out_tile_gpu[0].cstep;
+                        constants[3].i = out_gpu.w;
+                        constants[4].i = out_gpu.h;
+                        constants[5].i = out_gpu.cstep;
+                        constants[6].i = xi * TILE_SIZE_X * scale;
+                        constants[7].i = std::min(TILE_SIZE_X * scale, out_gpu.w - xi * TILE_SIZE_X * scale);
+                        constants[8].i = model_native_tile_profile ? 0 : pad_left * scale;
+                        constants[9].i = model_native_tile_profile ? 0 : pad_top * scale;
+                        constants[10].i = channels;
+                        constants[11].i = out_alpha_tile_gpu.w;
+                        constants[12].i = out_alpha_tile_gpu.h;
+                        constants[13].i = out_tile_gpu[0].w;
+                        constants[14].i = out_tile_gpu[4].w;
+
+                        ncnn::VkMat dispatcher;
+                        dispatcher.w = std::min(TILE_SIZE_X * scale, out_gpu.w - xi * TILE_SIZE_X * scale);
+                        dispatcher.h = out_gpu.h;
+                        dispatcher.c = channels;
+
+                        cmd.record_pipeline(realesrgan_postproc, bindings, constants, dispatcher);
+                    }
                 }
             }
             else
@@ -1009,32 +1116,68 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
 
                 // postproc
                 {
-                    std::vector<ncnn::VkMat> bindings(3);
-                    bindings[0] = out_tile_gpu;
-                    bindings[1] = out_alpha_tile_gpu;
-                    bindings[2] = out_gpu;
+                    if (tile_profile == TileProfile::RealCuganX4)
+                    {
+                        std::vector<ncnn::VkMat> bindings(4);
+                        bindings[0] = in_gpu;
+                        bindings[1] = out_tile_gpu;
+                        bindings[2] = out_alpha_tile_gpu;
+                        bindings[3] = out_gpu;
 
-                    std::vector<ncnn::vk_constant_type> constants(13);
-                    constants[0].i = out_tile_gpu.w;
-                    constants[1].i = out_tile_gpu.h;
-                    constants[2].i = out_tile_gpu.cstep;
-                    constants[3].i = out_gpu.w;
-                    constants[4].i = out_gpu.h;
-                    constants[5].i = out_gpu.cstep;
-                    constants[6].i = xi * TILE_SIZE_X * scale;
-                    constants[7].i = std::min(TILE_SIZE_X * scale, out_gpu.w - xi * TILE_SIZE_X * scale);
-                    constants[8].i = model_native_tile_profile ? 0 : pad_left * scale;
-                    constants[9].i = model_native_tile_profile ? 0 : pad_top * scale;
-                    constants[10].i = channels;
-                    constants[11].i = out_alpha_tile_gpu.w;
-                    constants[12].i = out_alpha_tile_gpu.h;
+                        std::vector<ncnn::vk_constant_type> constants(16);
+                        constants[0].i = in_gpu.w;
+                        constants[1].i = in_gpu.h;
+                        constants[2].i = in_gpu.cstep;
+                        constants[3].i = out_tile_gpu.w;
+                        constants[4].i = out_tile_gpu.h;
+                        constants[5].i = out_tile_gpu.cstep;
+                        constants[6].i = out_gpu.w;
+                        constants[7].i = out_gpu.h;
+                        constants[8].i = out_gpu.cstep;
+                        constants[9].i = xi * TILE_SIZE_X;
+                        constants[10].i = source_pad_top;
+                        constants[11].i = xi * TILE_SIZE_X * scale;
+                        constants[12].i = std::min(TILE_SIZE_X * scale, out_gpu.w - xi * TILE_SIZE_X * scale);
+                        constants[13].i = channels;
+                        constants[14].i = out_alpha_tile_gpu.w;
+                        constants[15].i = out_alpha_tile_gpu.h;
 
-                    ncnn::VkMat dispatcher;
-                    dispatcher.w = std::min(TILE_SIZE_X * scale, out_gpu.w - xi * TILE_SIZE_X * scale);
-                    dispatcher.h = out_gpu.h;
-                    dispatcher.c = channels;
+                        ncnn::VkMat dispatcher;
+                        dispatcher.w = std::min(TILE_SIZE_X * scale, out_gpu.w - xi * TILE_SIZE_X * scale);
+                        dispatcher.h = out_gpu.h;
+                        dispatcher.c = channels;
 
-                    cmd.record_pipeline(realesrgan_postproc, bindings, constants, dispatcher);
+                        cmd.record_pipeline(realesrgan_4x_postproc, bindings, constants, dispatcher);
+                    }
+                    else
+                    {
+                        std::vector<ncnn::VkMat> bindings(3);
+                        bindings[0] = out_tile_gpu;
+                        bindings[1] = out_alpha_tile_gpu;
+                        bindings[2] = out_gpu;
+
+                        std::vector<ncnn::vk_constant_type> constants(13);
+                        constants[0].i = out_tile_gpu.w;
+                        constants[1].i = out_tile_gpu.h;
+                        constants[2].i = out_tile_gpu.cstep;
+                        constants[3].i = out_gpu.w;
+                        constants[4].i = out_gpu.h;
+                        constants[5].i = out_gpu.cstep;
+                        constants[6].i = xi * TILE_SIZE_X * scale;
+                        constants[7].i = std::min(TILE_SIZE_X * scale, out_gpu.w - xi * TILE_SIZE_X * scale);
+                        constants[8].i = model_native_tile_profile ? 0 : pad_left * scale;
+                        constants[9].i = model_native_tile_profile ? 0 : pad_top * scale;
+                        constants[10].i = channels;
+                        constants[11].i = out_alpha_tile_gpu.w;
+                        constants[12].i = out_alpha_tile_gpu.h;
+
+                        ncnn::VkMat dispatcher;
+                        dispatcher.w = std::min(TILE_SIZE_X * scale, out_gpu.w - xi * TILE_SIZE_X * scale);
+                        dispatcher.h = out_gpu.h;
+                        dispatcher.c = channels;
+
+                        cmd.record_pipeline(realesrgan_postproc, bindings, constants, dispatcher);
+                    }
                 }
             }
 

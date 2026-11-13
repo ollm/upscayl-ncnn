@@ -337,7 +337,7 @@ static void print_usage()
     fprintf(stderr, "  -m model-path        folder path to the pre-trained models. default=models\n");
     fprintf(stderr, "  -n model-name        model name (default=realesrgan-x4plus, can be realesr-animevideov3 | realesrgan-x4plus-anime | realesrnet-x4plus or any other model)\n");
     fprintf(stderr, "  -P N, --prepadding N model prepadding in pixels (default=10, 0=disabled)\n");
-    fprintf(stderr, "  --tile-profile NAME  tile handling: generic (default), realcugan-x2, waifu2x-upconv7-x2\n");
+    fprintf(stderr, "  --tile-profile NAME  tile handling: generic (default), realcugan-x2/x3/x4, waifu2x-upconv7-x2\n");
     fprintf(stderr, "  -A N, --input-alignment N pad model inputs to a multiple of N (1..4096, default=1)\n");
     fprintf(stderr, "  -g gpu-id            gpu device to use (default=auto) can be 0,1,2 for multi-gpu\n");
     fprintf(stderr, "  -j load:proc:save    thread count for load/proc/save (default=1:2:2) can be 1:2,2,2:2 for multi-gpu\n");
@@ -384,7 +384,7 @@ static void print_daemon_help()
     fprintf(stderr, "  -c compress          compression of the output image, default 0 and varies to 100\n");
     fprintf(stderr, "  -t tile-size         tile size (>=32/0=auto, default=0) can be 0,0,0 for multi-gpu\n");
     fprintf(stderr, "  -P N, --prepadding N model prepadding in pixels (default=10, 0=disabled; set when starting daemon)\n");
-    fprintf(stderr, "  --tile-profile NAME  tile handling: generic, realcugan-x2, waifu2x-upconv7-x2 (set at daemon startup)\n");
+    fprintf(stderr, "  --tile-profile NAME  tile handling: generic, realcugan-x2/x3/x4, waifu2x-upconv7-x2 (set at daemon startup)\n");
     fprintf(stderr, "  -j load:proc:save    thread count for load/proc/save (default=1:2:2) can be 1:2,2,2:2 for multi-gpu\n");
     fprintf(stderr, "  -x                   enable tta mode\n");
     fprintf(stderr, "  -p                   force fp32 path (disable fp16/int8 storage)\n");
@@ -1580,11 +1580,15 @@ int main(int argc, char **argv)
                     tile_profile = TileProfile::Generic;
                 else if (wcscmp(value, L"realcugan-x2") == 0)
                     tile_profile = TileProfile::RealCuganX2;
+                else if (wcscmp(value, L"realcugan-x3") == 0)
+                    tile_profile = TileProfile::RealCuganX3;
+                else if (wcscmp(value, L"realcugan-x4") == 0)
+                    tile_profile = TileProfile::RealCuganX4;
                 else if (wcscmp(value, L"waifu2x-upconv7-x2") == 0)
                     tile_profile = TileProfile::Waifu2xUpconv7X2;
                 else
                 {
-                    fwprintf(stderr, L"🚨 Error: Invalid --tile-profile value; expected generic, realcugan-x2, or waifu2x-upconv7-x2.\n");
+                    fwprintf(stderr, L"🚨 Error: Invalid --tile-profile value; expected generic, realcugan-x2, realcugan-x3, realcugan-x4, or waifu2x-upconv7-x2.\n");
                     return -1;
                 }
                 continue;
@@ -1689,11 +1693,15 @@ int main(int argc, char **argv)
                     tile_profile = TileProfile::Generic;
                 else if (strcmp(value, "realcugan-x2") == 0)
                     tile_profile = TileProfile::RealCuganX2;
+                else if (strcmp(value, "realcugan-x3") == 0)
+                    tile_profile = TileProfile::RealCuganX3;
+                else if (strcmp(value, "realcugan-x4") == 0)
+                    tile_profile = TileProfile::RealCuganX4;
                 else if (strcmp(value, "waifu2x-upconv7-x2") == 0)
                     tile_profile = TileProfile::Waifu2xUpconv7X2;
                 else
                 {
-                    fprintf(stderr, "🚨 Error: Invalid --tile-profile value; expected generic, realcugan-x2, or waifu2x-upconv7-x2.\n");
+                    fprintf(stderr, "🚨 Error: Invalid --tile-profile value; expected generic, realcugan-x2, realcugan-x3, realcugan-x4, or waifu2x-upconv7-x2.\n");
                     return -1;
                 }
                 continue;
@@ -2239,6 +2247,26 @@ int main(int argc, char **argv)
         }
         prepadding = 18;
         fprintf(stderr, "🧩 Using tile profile realcugan-x2 (18 px model context)\n");
+    }
+    else if (tile_profile == TileProfile::RealCuganX3)
+    {
+        if (scale != 3)
+        {
+            fprintf(stderr, "🚨 Error: --tile-profile realcugan-x3 requires model scale x3.\n");
+            return -1;
+        }
+        prepadding = 14;
+        fprintf(stderr, "🧩 Using tile profile realcugan-x3 (14 px model context)\n");
+    }
+    else if (tile_profile == TileProfile::RealCuganX4)
+    {
+        if (scale != 4)
+        {
+            fprintf(stderr, "🚨 Error: --tile-profile realcugan-x4 requires model scale x4.\n");
+            return -1;
+        }
+        prepadding = 19;
+        fprintf(stderr, "🧩 Using tile profile realcugan-x4 (19 px model context)\n");
     }
     else if (tile_profile == TileProfile::Waifu2xUpconv7X2)
     {
