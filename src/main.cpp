@@ -1518,6 +1518,7 @@ int main(int argc, char **argv)
     path_t inputpath;
     path_t outputpath;
     int scale = 4;
+    bool scaleProvided = false;
     int resizeWidth;
     int resizeHeight;
     int resizeMode;
@@ -1735,6 +1736,7 @@ int main(int argc, char **argv)
             break;
         case L'z':
             scale = _wtoi(optarg);
+            scaleProvided = true;
             break;
         case L's':
             outputScale = _wtoi(optarg);
@@ -1860,6 +1862,7 @@ int main(int argc, char **argv)
             break;
         case 'z':
             scale = atoi(optarg);
+            scaleProvided = true;
             break;
         case 's':
             outputScale = atoi(optarg);
@@ -2121,6 +2124,50 @@ int main(int argc, char **argv)
     //     return -1;
     // }
 
+    // Infer scale from the model name only when the user did not specify -z.
+    if (scaleProvided)
+    {
+        fprintf(stderr, "✨ Using scale x%d from -z\n", scale);
+    }
+    else if (modelname.find(PATHSTR("x16")) != path_t::npos || modelname.find(PATHSTR("16x")) != path_t::npos)
+    {
+        fprintf(stderr, "✨ Detected scale x16\n");
+        scale = 16;
+    }
+    else if (modelname.find(PATHSTR("x8")) != path_t::npos || modelname.find(PATHSTR("8x")) != path_t::npos)
+    {
+        fprintf(stderr, "✨ Detected scale x8\n");
+        scale = 8;
+    }
+    else if (modelname.find(PATHSTR("x4")) != path_t::npos || modelname.find(PATHSTR("4x")) != path_t::npos ||
+             modelname.find(PATHSTR("4.0x")) != path_t::npos)
+    {
+        fprintf(stderr, "✨ Detected scale x4\n");
+        scale = 4;
+    }
+    else if (modelname.find(PATHSTR("x3")) != path_t::npos || modelname.find(PATHSTR("3x")) != path_t::npos ||
+             modelname.find(PATHSTR("3.0x")) != path_t::npos)
+    {
+        fprintf(stderr, "✨ Detected scale x3\n");
+        scale = 3;
+    }
+    else if (modelname.find(PATHSTR("x2")) != path_t::npos || modelname.find(PATHSTR("2x")) != path_t::npos ||
+             modelname.find(PATHSTR("2.0x")) != path_t::npos)
+    {
+        fprintf(stderr, "✨ Detected scale x2\n");
+        scale = 2;
+    }
+    else if (modelname.find(PATHSTR("x1")) != path_t::npos || modelname.find(PATHSTR("1x")) != path_t::npos ||
+             modelname.find(PATHSTR("1.0x")) != path_t::npos)
+    {
+        fprintf(stderr, "✨ Detected scale x1\n");
+        scale = 1;
+    }
+    else
+    {
+        fprintf(stderr, "✨ Using the default scale x4\n");
+    }
+
 #if _WIN32
     wchar_t parampath[256];
     wchar_t modelpath[256];
@@ -2139,43 +2186,6 @@ int main(int argc, char **argv)
 #else
     char parampath[256];
     char modelpath[256];
-
-    // Check if modelname includes scale
-    if (modelname.find(PATHSTR("x1")) != path_t::npos || modelname.find(PATHSTR("1x")) != path_t::npos)
-    {
-        fprintf(stderr, "✨ Detected scale x1\n");
-        scale = 1;
-    }
-    else if (modelname.find(PATHSTR("x2")) != path_t::npos || modelname.find(PATHSTR("2x")) != path_t::npos)
-    {
-        fprintf(stderr, "✨ Detected scale x2\n");
-        scale = 2;
-    }
-    else if (modelname.find(PATHSTR("x3")) != path_t::npos || modelname.find(PATHSTR("3x")) != path_t::npos)
-    {
-        fprintf(stderr, "✨ Detected scale x3\n");
-        scale = 3;
-    }
-    else if (modelname.find(PATHSTR("x4")) != path_t::npos || modelname.find(PATHSTR("4x")) != path_t::npos)
-    {
-        fprintf(stderr, "✨ Detected scale x4\n");
-        scale = 4;
-    }
-    else if (modelname.find(PATHSTR("x8")) != path_t::npos || modelname.find(PATHSTR("8x")) != path_t::npos)
-    {
-        fprintf(stderr, "✨ Detected scale x8\n");
-        scale = 8;
-    }
-    else if (modelname.find(PATHSTR("x16")) != path_t::npos || modelname.find(PATHSTR("16x")) != path_t::npos)
-    {
-        fprintf(stderr, "✨ Detected scale x16\n");
-        scale = 16;
-    }
-
-    if (scale == 4)
-    {
-        fprintf(stderr, "✨ Using the default scale x4\n");
-    }
 
     if (modelname == PATHSTR("realesr-animevideov3"))
     {
